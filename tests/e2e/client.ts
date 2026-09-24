@@ -87,6 +87,8 @@ export interface SaveFile {
     phase: string;
     inBattle: boolean;
     levels: Record<string, number>;
+    loadout: Record<string, Array<string | null>>;
+    formation: { units: Record<string, { x: number; y: number }> };
     records: Array<{ encounterId: string; attempts: number; won: boolean }>;
   } | null;
 }

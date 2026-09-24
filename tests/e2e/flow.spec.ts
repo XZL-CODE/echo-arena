@@ -190,3 +190,135 @@ test('清除全部存档后回到第一次打开的状态，并留一份备份',
   await second.app.close();
   expect(errors).toEqual([]);
 });
+
+test('战前换起手招式；战斗中空格暂停、失焦自动暂停，按 1 再点场地发动冲锋', async () => {
+  const { app, page } = await launchClient({ hooks: true });
+  const errors = await ready(page);
+  await page.click('[data-testid=start]');
+  await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  await page.click('[data-testid=starter-charge]');
+  await expect.poll(async () => (await currentRun(page)).levels).toEqual({ charge: 1 });
+  await fight(page);
+
+  const banner = page.locator('[data-testid=banner]');
+  const timer = page.locator('[data-testid=timer]');
+  await page.evaluate(() => (window as unknown as HookWindow).__echo.fastForward(2));
+  await page.keyboard.press('Space');
+  await expect(banner).toContainText('已暂停');
+  await page.waitForTimeout(300);
+  const frozen = (await timer.textContent()) ?? '';
+  expect(frozen).not.toBe('0:00');
+  await page.waitForTimeout(1500);
+  await expect(timer).toHaveText(frozen);
+  await page.keyboard.press('Space');
+  await expect(banner).toHaveCount(0);
+  await expect(timer).not.toHaveText(frozen, { timeout: 5_000 });
+
+  const cooldown = page.locator('[data-testid=skill-guard] .cd-mask');
+  await expect(cooldown).toHaveText('');
+  await page.keyboard.press('1');
+  await expect(banner).toContainText('冲锋');
+  const box = await page.locator('[data-testid=arena]').boundingBox();
+  if (!box) throw new Error('找不到竞技场画布');
+  await page.mouse.click(box.x + box.width * 0.7, box.y + box.height * 0.5);
+  await expect(banner).toHaveCount(0);
+  await expect(cooldown).not.toHaveText('');
+  await page.screenshot({ path: screenshotPath('flow-charge') });
+
+  // 窗口失去焦点时自动暂停（设置里默认打开）。
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect(banner).toContainText('自动暂停');
+  await app.close();
+  expect(errors).toEqual([]);
+});
+
+test('最后一场获胜后看到整轮结算，可以回到标题或再来一轮', async () => {
+  const { app, page } = await launchClient({ hooks: true });
+  const errors = await ready(page);
+  await setupRun(
+    page,
+    'volley',
+    [
+      ['reflect', 2],
+      ['ricochet', 2],
+      ['charge', 1],
+      ['mend', 1],
+    ],
+    6,
+  );
+  await fight(page);
+  expect(await finishBattle(page)).toBe('win');
+  await expect(page.locator('[data-testid=result-next]')).toContainText('整轮结算', {
+    timeout: 15_000,
+  });
+  await page.click('[data-testid=result-next]');
+  await expect(page.locator('[data-testid=summary]')).toBeVisible();
+  await page.screenshot({ path: screenshotPath('flow-summary'), animations: 'disabled' });
+
+  await page.click('[data-testid=summary-title]');
+  await expect(page.locator('[data-testid=start]')).toContainText('再来一轮');
+  await expect(page.locator('[data-testid=last-summary]')).toBeVisible();
+  await page.click('[data-testid=start]');
+  await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  const run = await currentRun(page);
+  expect(run.matchIndex).toBe(0);
+  expect(run.phase).toBe('prep');
+  expect(run.levels).toEqual({ reflect: 1 });
+  await app.close();
+  expect(errors).toEqual([]);
+});
+
+test('战前调整：点槽位卸下、从招式库装回，拖动队员换开场位置', async () => {
+  const { app, page, userData } = await launchClient({ hooks: true });
+  const errors = await ready(page);
+  await setupRun(
+    page,
+    'swarm',
+    [
+      ['reflect', 1],
+      ['ricochet', 1],
+      ['pierce', 1],
+      ['mend', 1],
+    ],
+    3,
+  );
+  const slinger = async () => (await currentRun(page)).loadout.slinger ?? [];
+  expect(await slinger()).toContain('pierce');
+
+  await page.locator('[data-testid^=slot-slinger-]', { hasText: '贯穿射' }).click();
+  await page.getByRole('button', { name: '卸下' }).click();
+  await expect(page.locator('[data-testid=lib-pierce]')).toBeVisible();
+  expect(await slinger()).not.toContain('pierce');
+  await page.click('[data-testid=lib-pierce]');
+  await page.getByRole('button', { name: '装到小弹的空槽' }).click();
+  await expect(page.locator('[data-testid=lib-pierce]')).toHaveCount(0);
+  expect(await slinger()).toContain('pierce');
+
+  // 竞技场坐标 → 屏幕坐标：画布四周各有 34 单位的木框，整体 1268×728。
+  const box = await page.locator('[data-testid=arena]').boundingBox();
+  if (!box) throw new Error('找不到竞技场画布');
+  const toScreen = (x: number, y: number) => ({
+    x: box.x + ((x + 34) / 1268) * box.width,
+    y: box.y + ((y + 34) / 728) * box.height,
+  });
+  const from = (await currentRun(page)).formation.units.guard;
+  if (!from) throw new Error('没有阿铁的站位');
+  const a = toScreen(from.x, from.y);
+  const b = toScreen(from.x - 60, 170);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(b.x, b.y, { steps: 10 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => Math.round((await currentRun(page)).formation.units.guard?.y ?? 0))
+    .toBeLessThan(from.y - 100);
+  await page.screenshot({ path: screenshotPath('flow-prep-adjusted'), animations: 'disabled' });
+
+  await fight(page);
+  await expect(page.locator('[data-testid=skill-slinger]')).toBeVisible();
+  await app.close();
+  const save = readSave(userData);
+  expect(save?.run?.loadout.slinger).toContain('pierce');
+  expect(save?.run?.formation.units.guard?.y ?? 999).toBeLessThan(from.y - 100);
+  expect(errors).toEqual([]);
+});
