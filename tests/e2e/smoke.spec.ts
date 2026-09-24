@@ -15,11 +15,11 @@ test('客户端启动、开始一轮并写入本地存档', async () => {
   await page.waitForSelector('body[data-ready]', { timeout: 30_000 });
   expect(await page.title()).toBe('回声竞技场');
   expect(await page.evaluate(() => document.body.dataset.ready)).toBe('file');
-  await page.screenshot({ path: screenshotPath('smoke-title') });
+  await page.screenshot({ path: screenshotPath('smoke-title'), animations: 'disabled' });
 
   await page.click('[data-testid=start]');
   await expect(page.locator('[data-testid=fight]')).toBeVisible();
-  await page.screenshot({ path: screenshotPath('smoke-prep') });
+  await page.screenshot({ path: screenshotPath('smoke-prep'), animations: 'disabled' });
   await page.click('[data-testid=fight]');
   await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
   await page.waitForTimeout(2500);

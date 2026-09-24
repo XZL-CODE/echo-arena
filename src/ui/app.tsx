@@ -618,7 +618,7 @@ export class App {
               ? `（${records.clearedDifficulties.map((d) => DIFFICULTY_LABEL[d]).join('、')}）`
               : ''
           }`
-        : '一轮 7 场，大约 20–30 分钟；随时可以停，进度会自动保存。';
+        : '一轮 7 场，大约 15–25 分钟；随时可以停，进度会自动保存。';
 
     mount(
       this.overlay,
