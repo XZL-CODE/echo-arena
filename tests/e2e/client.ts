@@ -6,7 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+// path.resolve 去掉末尾的分隔符：Windows 上 Playwright 会给参数加引号，
+// 末尾的反斜杠会把收尾引号转义掉，导致 Electron 拿到错误的程序路径。
+const ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 
 export interface Client {
   app: ElectronApplication;
