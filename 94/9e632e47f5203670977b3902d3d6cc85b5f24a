@@ -1,0 +1,16 @@
+AGENTS.md
+  h_41003e691dccbb 1-36
+CLAUDE.md
+  h_41003e691dccbb 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "949e632e47f5203670977b3902d3d6cc85b5f24a",
+  "prompts": {},
+  "humans": {
+    "h_41003e691dccbb": {
+      "author": "MacBookPro <abc10086xzl@gmail.com>"
+    }
+  }
+}
