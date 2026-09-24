@@ -157,16 +157,28 @@ test('贯穿射：一发大弹打穿一条直线上的多个敌人', () => {
 });
 
 test('镜桩：敌方弹丸碰到镜桩会转向，打到对手', () => {
-  const enc = encounter(archers(900, [330]));
-  const form = formation({ x: 300, y: 330 });
+  const enc = encounter(archers(1000, [330]));
+  const form = formation({ x: 120, y: 560 }, { x: 60, y: 60 }, { x: 60, y: 620 });
   form.gadgets = [{ module: 'mirrorpost', index: 0, x: 600, y: 330 }];
   const world = makeWorld(
     enc,
     { modules: [['mirrorpost', 1]], gadgets: form.gadgets },
     { formation: form },
   );
-  world.run(12);
-  assert.ok((world.stats.damageBySource.mirrorpost ?? 0) > 0, '镜桩转向的箭应当命中');
+  const archer = world.aliveOf(1)[0]!;
+  world.spawnProjectile({
+    kind: 'arrow',
+    team: 1,
+    x: 720,
+    y: 330,
+    vx: -430,
+    vy: 0,
+    damage: 9,
+    ownerId: archer.id,
+  });
+  world.run(2);
+  assert.ok(world.stats.reflects > 0, '箭应当在镜桩处转向');
+  assert.ok((world.stats.damageBySource.mirrorpost ?? 0) > 0, '转向后的箭应当命中木箭手');
 });
 
 test('弹簧桩：被击飞撞上它的敌人会被弹开并受伤', () => {

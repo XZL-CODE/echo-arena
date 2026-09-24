@@ -30,10 +30,13 @@ export function generateOffers(run: RunState): Offer[] {
   const pickFrom = (pool: ModuleId[]) => {
     const available = pool.filter((id) => !taken.has(id));
     if (available.length === 0) return undefined;
-    // 尽量避开已选中选项的所属队员，让三个选项代表不同方向。
+    // 尽量避开已选选项的思路分组与所属队员，让三个选项代表不同方向。
+    const families = new Set(chosen.map((o) => MODULE_DEFS[o.id].family));
     const owners = new Set(chosen.map((o) => MODULE_DEFS[o.id].owner));
-    const varied = available.filter((id) => !owners.has(MODULE_DEFS[id].owner));
-    return rng.pick(varied.length > 0 ? varied : available);
+    const byFamily = available.filter((id) => !families.has(MODULE_DEFS[id].family));
+    const both = byFamily.filter((id) => !owners.has(MODULE_DEFS[id].owner));
+    const pool2 = both.length > 0 ? both : byFamily.length > 0 ? byFamily : available;
+    return rng.pick(pool2);
   };
 
   const relevantFresh = fresh.filter((id) => relevant.includes(id));

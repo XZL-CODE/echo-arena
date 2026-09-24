@@ -9,9 +9,10 @@ export const VIEW_H = ARENA.height + RAIL * 2;
 export class View {
   readonly canvas: HTMLCanvasElement;
   readonly ctx: CanvasRenderingContext2D;
-  cssW = VIEW_W;
-  cssH = VIEW_H;
-  dpr = 1;
+  /** 初始为 0，保证第一次 fit 一定会设置画布尺寸。 */
+  cssW = 0;
+  cssH = 0;
+  dpr = 0;
   /** 每个竞技场单位对应的画布像素数（含 dpr）。 */
   scale = 1;
 

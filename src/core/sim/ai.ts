@@ -467,14 +467,16 @@ function updateBell(world: World, u: Unit, dt: number): void {
   const threat = nearestOpponent(world, u.x, u.y, u.team);
   if (threat) face(u, threat.x, threat.y, dt);
   const follow = anchor ?? world.units.find((t) => t.alive && t.team === 0 && t.kind === 'slinger');
-  if (threat && threat.def.range <= 30 && edgeDist(u, threat) < 50) {
+  if (threat && edgeDist(u, threat) < (threat.def.range <= 30 ? 50 : 90)) {
     const to = retreatPoint(world, u, threat);
     moveToward(world, u, to.x, to.y);
     u.state = 'move';
   } else if (follow) {
+    // 待在阿铁身后、偏向我方一侧，不跑进敌阵。
     const foes = world.aliveOf(1);
     const c = centroid(foes) ?? { x: world.width, y: world.height / 2 };
-    const back = normalize(follow.x - c.x, follow.y - c.y, -1, 0);
+    const away = normalize(follow.x - c.x, follow.y - c.y, -1, 0);
+    const back = normalize(away.x - 0.8, away.y, -1, 0);
     const wantX = clamp(follow.x + back.x * 85, 30, world.width - 30);
     const wantY = clamp(follow.y + back.y * 85, 30, world.height - 30);
     if (dist(u.x, u.y, wantX, wantY) > 14) {
@@ -586,13 +588,16 @@ function updateArcher(world: World, u: Unit, dt: number): void {
   if (!target) return;
   u.targetId = target.id;
   face(u, target.x, target.y, dt);
-  if (dist(u.x, u.y, target.x, target.y) > u.def.range) {
-    moveToward(world, u, target.x, target.y);
+  // 齐射阵形：开场先守住位置；长时间没有目标进入射程才缓慢前压。
+  if (dist(u.x, u.y, target.x, target.y) > u.def.range && world.t > ARCHER_HOLD_TIME) {
+    moveToward(world, u, target.x, target.y, 0.6);
     u.state = 'move';
   } else {
     u.state = 'idle';
   }
 }
+
+const ARCHER_HOLD_TIME = 9;
 
 function fireArrow(world: World, u: Unit): void {
   const angle = Math.atan2(u.aimY - u.y, u.aimX - u.x) + u.rng.range(-0.05, 0.05);

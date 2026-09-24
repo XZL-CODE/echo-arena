@@ -154,6 +154,11 @@ export class World {
     return this.units.filter((u) => u.alive && u.team === team);
   }
 
+  /** 尚未出场的波次数。 */
+  wavesLeft(): number {
+    return this.waves.length;
+  }
+
   overtimeMult(): number {
     return 1 + SIM.overtimeBonus * this.overtimeLevel;
   }

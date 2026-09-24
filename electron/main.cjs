@@ -65,7 +65,9 @@ function createWindow() {
     if (!url.startsWith('app://')) event.preventDefault();
   });
 
-  mainWindow.loadURL('app://game/index.html');
+  // 端到端测试时打开测试钩子（快进战斗等），正常运行不会带这个参数。
+  const query = process.env.ECHO_ARENA_TEST === '1' ? '?test=1' : '';
+  mainWindow.loadURL(`app://game/index.html${query}`);
   if (DEV) watchForReload(mainWindow);
 }
 
