@@ -1,0 +1,19 @@
+Echo_Arena_Brief.md
+  s_68ce1a0adeb496::t_97b74b3b69f29b 1-269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "955583997e36542373fdde84a0771023cbbee358",
+  "prompts": {},
+  "sessions": {
+    "s_68ce1a0adeb496": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cd7d23a-9784-4a0d-a176-61c4c0d1ab8d",
+        "model": "qwen3.7-plus"
+      },
+      "human_author": "MacBookPro <abc10086xzl@gmail.com>"
+    }
+  }
+}
