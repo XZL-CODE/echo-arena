@@ -1,5 +1,5 @@
 // 回声竞技场桌面客户端：主进程。负责窗口、本地资源协议与存档读写。
-const { app, BrowserWindow, ipcMain, Menu, net, protocol, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, net, protocol, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -153,6 +153,10 @@ app.on('second-instance', () => {
 });
 
 app.whenReady().then(() => {
+  // 游戏里没有文字输入。内置拼写检查在 Windows / Linux 上会联网下载词典，这里整体关掉，
+  // 保证运行时不访问外部网络。
+  session.defaultSession.setSpellCheckerLanguages([]);
+  session.defaultSession.setSpellCheckerEnabled(false);
   protocol.handle('app', (request) => {
     const filePath = resolveAsset(request.url);
     if (!filePath) return new Response('Forbidden', { status: 403 });

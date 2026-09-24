@@ -24,7 +24,7 @@ Status: implemented
 - 以 Electron 桌面客户端交付（用户 2026-09-24 追加要求“我想要客户端”）。主进程只负责窗口、`app://` 本地资源协议和存档读写；页面在上下文隔离加沙盒中运行，只通过预加载脚本拿到存档与窗口接口。
 - 游戏本体仍用 TypeScript（纯 JS 实现的 6.x 编译器）直接编译成原生 ES 模块：Canvas 2D 画战场，Web Audio 合成声音，界面用原生 DOM 加自写的 JSX 工厂，运行时没有第三方依赖。Electron 自带的 Chromium 保证两个平台画面和声音一致。
 - 从源码运行：`npm start` 或双击启动脚本。首次自动安装依赖、下载 Electron（官方源失败时改用 npmmirror 镜像）并构建，然后打开游戏窗口。要求 Node.js 22.12 以上（Electron 44 安装工具的要求）。启动脚本的 `--check` 只做准备、不开窗口，供 CI 验证。
-- 打包用 electron-builder：macOS 出 Intel 与 Apple 芯片通用的 dmg，只做 ad-hoc 签名、不公证；Windows 出 NSIS 安装包和免安装版，不签名。GitHub Actions（用户同意用 CI 打包，并已把仓库设为公开）在 macOS 与 Windows 机器上打包，再对打包好的客户端跑全部端到端测试；同时在两个平台上从全新检出执行启动脚本并用源码版跑冒烟测试；推送 `v*` 标签时发布 Release。
+- 打包用 electron-builder：macOS 出 Intel 与 Apple 芯片通用的 dmg，只做 ad-hoc 签名、不公证；Windows 出 NSIS 安装包和免安装版，不签名。GitHub Actions（用户同意用 CI 打包，并已把仓库设为公开）在 macOS 与 Windows 机器上打包，再对打包好的客户端跑全部端到端测试；同时在两个平台上从全新检出执行启动脚本并用源码版跑冒烟测试；推送 `v*` 标签，或手动运行并填写版本号时，在测试通过后发布 Release。
 - 取舍：Electron 体积大（安装包 100 MB 以上），换来两个平台一致的渲染与音频和成熟的打包链。Tauri 需要 Rust 工具链，且 macOS 上是 Safari 内核，没有采用。
 - 规则模拟放在不依赖 DOM 的 `src/core`，用 Node 内置测试运行器测试；Playwright 直接驱动客户端做端到端测试。
 
@@ -39,6 +39,8 @@ Status: implemented
 - GitHub Actions 在 macOS（Apple 芯片虚拟机）打出通用 dmg、在 Windows 打出安装版与免安装版，对打包好的程序跑全部端到端测试均通过。
 - 本地 Linux 环境从全新克隆执行启动脚本，能装好依赖、下载 Electron、构建并打开客户端。
 - 页面的内容安全策略只允许加载本地资源；冒烟测试核对页面请求全部是 `app://`、`data:` 或 `blob:`。
+- Electron 内置拼写检查会在 Windows / Linux 上联网下载词典：本地代理日志显示每次启动都尝试连接 `redirector.gvt1.com`。启动时清空拼写检查语言并关闭拼写检查后，全部端到端测试期间代理日志没有任何对外连接；冒烟测试核对这项设置。
+- 启动脚本在 macOS 与 Windows 的全新检出上完成安装、下载与构建，源码版冒烟测试通过（GitHub Actions）。
 - 未验证：真实 Mac / Windows 电脑上的安装与首次打开（Gatekeeper、SmartScreen 提示）、Intel Mac 上的运行。
 
 ## Related materials

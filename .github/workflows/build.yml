@@ -1,5 +1,5 @@
 # 检查、测试；在 macOS 与 Windows 上打包桌面客户端并对打包结果跑端到端测试，
-# 同时验证从源码用启动脚本运行；推送 v* 标签时发布 Release。
+# 同时验证从源码用启动脚本运行；推送 v* 标签，或手动运行并填写版本号时发布 Release。
 name: 构建与打包
 
 on:
@@ -8,6 +8,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: '要发布的版本号（如 v0.1.0）；留空只构建、不发布'
+        required: false
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -119,7 +124,7 @@ jobs:
 
   release:
     name: 发布 Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.release, 'v')
     needs: [package, source]
     runs-on: ubuntu-latest
     permissions:
@@ -133,11 +138,14 @@ jobs:
       - name: 创建 Release 并上传安装包
         env:
           GH_TOKEN: ${{ github.token }}
+          # 推送标签时用标签名；手动运行时用填写的版本号，并在当前提交上新建标签。
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release }}
         run: |
           cd artifacts
           sha256sum * > SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" * \
+          gh release create "$TAG" * \
             --repo "$GITHUB_REPOSITORY" \
-            --title "回声竞技场 $GITHUB_REF_NAME" \
-            --notes "macOS 下载 .dmg（Apple 芯片与 Intel 通用）；Windows 下载 -win-setup.exe（安装版）或 -win-portable.exe（免安装）。安装包未签名，首次打开的办法、操作与玩法见 [README](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/README.md)。" \
+            --target "$GITHUB_SHA" \
+            --title "回声竞技场 $TAG" \
+            --notes "macOS 下载 .dmg（Apple 芯片与 Intel 通用）；Windows 下载 -win-setup.exe（安装版）或 -win-portable.exe（免安装）。安装包未签名，首次打开的办法、操作与玩法见 [README](https://github.com/$GITHUB_REPOSITORY/blob/$TAG/README.md)。" \
             --generate-notes

@@ -25,6 +25,14 @@ test('客户端启动、开始一轮并写入本地存档', async () => {
   await page.waitForTimeout(2500);
   await page.screenshot({ path: screenshotPath('smoke-battle') });
 
+  // 内置拼写检查在 Windows / Linux 上会联网下载词典，客户端启动时把它关掉了。
+  const spell = await app.evaluate(({ session }) => ({
+    enabled: session.defaultSession.isSpellCheckerEnabled(),
+    languages: session.defaultSession.getSpellCheckerLanguages(),
+  }));
+  expect(spell.enabled).toBe(false);
+  if (process.platform !== 'darwin') expect(spell.languages).toEqual([]);
+
   await app.close();
   expect(errors).toEqual([]);
   expect(requests.length).toBeGreaterThan(0);
