@@ -1607,6 +1607,17 @@ body {
   }
 }
 
+/* 最小窗口宽度下放不下五栏：收起操作提示栏（集火目标在场上也有标记）。 */
+@media (max-width: 1000px) {
+  .battle-hud {
+    grid-template-columns: minmax(140px, 0.9fr) repeat(3, minmax(200px, 1.3fr));
+  }
+
+  .battle-hud .hud-focus {
+    display: none;
+  }
+}
+
 @media (max-height: 720px) {
   .topbar {
     height: 48px;
