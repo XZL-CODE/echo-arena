@@ -43,16 +43,52 @@ export function resolveExecutable(target: string): string {
   return path.join(full, candidates[0]);
 }
 
-export async function launchClient(userData?: string): Promise<Client> {
-  const dir = userData ?? fs.mkdtempSync(path.join(os.tmpdir(), 'echo-arena-e2e-'));
+export interface LaunchOptions {
+  /** 复用已有的用户数据目录（模拟关闭后重新打开）。 */
+  userData?: string;
+  /** 打开测试钩子 window.__echo（快进、直接摆出对局等）。 */
+  hooks?: boolean;
+}
+
+export async function launchClient(options: LaunchOptions = {}): Promise<Client> {
+  const dir = options.userData ?? fs.mkdtempSync(path.join(os.tmpdir(), 'echo-arena-e2e-'));
   const env = { ...process.env, ECHO_ARENA_USER_DATA: dir } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
+  if (options.hooks) env.ECHO_ARENA_TEST = '1';
+  else delete env.ECHO_ARENA_TEST;
   const target = process.env.ECHO_ARENA_EXECUTABLE;
   const app = target
     ? await electron.launch({ executablePath: resolveExecutable(target), env })
     : await electron.launch({ args: [ROOT], env });
   const page = await app.firstWindow();
   return { app, page, userData: dir };
+}
+
+/** 等界面启动完毕，并记录页面里的脚本错误（测试结束时应为空）。 */
+export async function ready(page: Page): Promise<string[]> {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.waitForSelector('body[data-ready]', { timeout: 30_000 });
+  return errors;
+}
+
+/** 读取存档文件；文件不存在时返回 null。 */
+export function readSave(userData: string): SaveFile | null {
+  const file = path.join(userData, 'save.json');
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8')) as SaveFile;
+}
+
+export interface SaveFile {
+  app: string;
+  settings: Record<string, unknown>;
+  run: {
+    matchIndex: number;
+    phase: string;
+    inBattle: boolean;
+    levels: Record<string, number>;
+    records: Array<{ encounterId: string; attempts: number; won: boolean }>;
+  } | null;
 }
 
 export function screenshotPath(name: string): string {

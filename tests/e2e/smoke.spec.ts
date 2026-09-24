@@ -1,5 +1,5 @@
 // 冒烟测试：客户端能打开、开始一轮、进入战斗，并把存档写进用户数据目录。
-// CI 在 macOS 与 Windows 上用打包好的程序运行这一项。
+// CI 在 macOS 与 Windows 上也用打包好的程序运行全部端到端测试。
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
