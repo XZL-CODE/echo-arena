@@ -9,6 +9,9 @@ test('客户端启动、开始一轮并写入本地存档', async () => {
   const { app, page, userData } = await launchClient();
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  // 游戏只加载本地资源（页面的 CSP 也只允许 app://）。
+  const requests: string[] = [];
+  app.context().on('request', (request) => requests.push(request.url()));
   await page.waitForSelector('body[data-ready]', { timeout: 30_000 });
   expect(await page.title()).toBe('回声竞技场');
   expect(await page.evaluate(() => document.body.dataset.ready)).toBe('file');
@@ -24,6 +27,8 @@ test('客户端启动、开始一轮并写入本地存档', async () => {
 
   await app.close();
   expect(errors).toEqual([]);
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests.filter((url) => !/^(app|data|blob):/.test(url))).toEqual([]);
   const save = JSON.parse(fs.readFileSync(path.join(userData, 'save.json'), 'utf8'));
   expect(save.app).toBe('echo-arena');
   expect(save.run.inBattle).toBe(true);

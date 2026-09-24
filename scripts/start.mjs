@@ -1,6 +1,7 @@
 // 一键启动客户端：首次自动安装依赖（含 Electron）并构建，然后打开游戏窗口。
-// 用法：node scripts/start.mjs [--attach]
+// 用法：node scripts/start.mjs [--attach | --check]
 //   --attach  保持在前台运行（开发时查看日志）；默认打开窗口后脚本立即结束。
+//   --check   只做准备（装依赖、下载 Electron、构建）并确认程序就绪，不打开窗口（CI 用）。
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -83,11 +84,16 @@ function main() {
   ensureBuild();
 
   const executable = electronExecutable();
+  if (process.argv.includes('--check')) {
+    if (!fs.existsSync(executable)) fail(`找不到 Electron 程序：${executable}`);
+    console.log(`\n  检查通过：依赖、Electron 与游戏构建均已就绪。\n  ${executable}\n`);
+    return;
+  }
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   if (attach) {
     const child = spawn(executable, [ROOT_DIR], { stdio: 'inherit', env });
-    child.on('exit', (code) => process.exit(code ?? 0));
+    child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
     return;
   }
   const child = spawn(executable, [ROOT_DIR], { stdio: 'ignore', detached: true, env });

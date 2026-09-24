@@ -3,8 +3,9 @@
 # 首次运行会自动安装依赖并下载 Electron（需要联网），之后可离线游玩。
 cd "$(dirname "$0")" || exit 1
 
-# 从 Finder 打开的终端可能没有加载 Homebrew / nvm 的 PATH，这里补上常见位置。
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# 从 Finder 打开的终端可能没有加载 Homebrew / nvm 的 PATH，这里在末尾补上常见位置
+# （放在末尾，已有 PATH 里的 Node 优先，避免被旧版本覆盖）。
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
 if ! command -v node >/dev/null 2>&1 && [ -s "$HOME/.nvm/nvm.sh" ]; then
   . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
 fi
