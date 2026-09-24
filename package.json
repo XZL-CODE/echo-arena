@@ -1,27 +1,116 @@
 {
   "name": "echo-arena",
+  "productName": "回声竞技场",
   "version": "0.1.0",
   "private": true,
-  "description": "回声竞技场：可在 macOS 与 Windows 本地离线游玩的单人短局战术小游戏",
+  "description": "回声竞技场：可在 macOS 与 Windows 上离线游玩的单人短局战术小游戏（桌面客户端）",
+  "author": "Echo Arena",
   "type": "module",
+  "main": "electron/main.cjs",
   "engines": {
-    "node": ">=18.17"
+    "node": ">=22.12"
   },
   "scripts": {
     "start": "node scripts/start.mjs",
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
-    "serve": "node scripts/server.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "node scripts/run-tests.mjs",
-    "test:e2e": "playwright test",
+    "test:e2e": "node scripts/build.mjs && playwright test",
     "balance": "node scripts/run-tests.mjs --balance",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "dist": "node scripts/build.mjs && electron-builder --publish never",
+    "dist:mac": "node scripts/build.mjs && electron-builder --mac --publish never",
+    "dist:win": "node scripts/build.mjs && electron-builder --win --publish never",
+    "dist:linux": "node scripts/build.mjs && electron-builder --linux --publish never"
+  },
+  "build": {
+    "appId": "local.echoarena.game",
+    "productName": "回声竞技场",
+    "executableName": "EchoArena",
+    "artifactName": "EchoArena-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map",
+      "!dist/.build-stamp",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
+    "publish": null,
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.games",
+      "icon": "resources/icon.png",
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "artifactName": "EchoArena-${version}-mac-universal.${ext}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "回声竞技场",
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "language": "2052",
+      "artifactName": "EchoArena-${version}-win-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "EchoArena-${version}-win-portable.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Game",
+      "icon": "resources/icon.png"
+    }
   },
   "devDependencies": {
     "@playwright/test": "1.56.1",
     "@types/node": "^22.10.0",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
     "prettier": "^3.8.1",
     "typescript": "~6.0.3"
   }

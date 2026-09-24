@@ -1,10 +1,12 @@
-// 开发模式：TypeScript 监听编译 + public 目录同步 + 本机服务（刷新浏览器即可看到改动）。
+// 开发模式：TypeScript 监听编译 + public 同步 + 客户端窗口（dist 变化后自动刷新）。
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { build, copyPublic } from './build.mjs';
-import { DEFAULT_PORT, PUBLIC_DIR, ROOT_DIR } from './paths.mjs';
-import { createGameServer, listen } from './server.mjs';
+import { PUBLIC_DIR, ROOT_DIR } from './paths.mjs';
+
+const require = createRequire(import.meta.url);
 
 build();
 
@@ -26,11 +28,11 @@ fs.watch(PUBLIC_DIR, { recursive: true }, () => {
   copyTimer = setTimeout(copyPublic, 100);
 });
 
-const { server, store } = createGameServer();
-const port = await listen(server, DEFAULT_PORT + 1);
-console.log(`开发服务：http://127.0.0.1:${port}/  （存档：${store.savePath}）`);
-
-process.on('SIGINT', () => {
+const electron = require(path.join(ROOT_DIR, 'node_modules', 'electron'));
+const env = { ...process.env, ECHO_ARENA_DEV: '1' };
+delete env.ELECTRON_RUN_AS_NODE;
+const app = spawn(electron, [ROOT_DIR], { stdio: 'inherit', env });
+app.on('exit', (code) => {
   tsc.kill();
-  server.close(() => process.exit(0));
+  process.exit(code ?? 0);
 });

@@ -4,7 +4,7 @@ Status: proposed
 
 ## Problem
 
-游戏要在 macOS 和 Windows 上本地、离线运行，启动要简单，工程也要方便以后迭代。需要确定渲染、界面、构建、启动和本机服务怎么组合。
+游戏要以桌面客户端的形式在 macOS 和 Windows 上本地、离线运行，启动要简单，工程也要方便以后迭代。需要确定客户端外壳、渲染、界面、构建、打包和存档怎么组合。
 
 ## Proposal
 
@@ -17,16 +17,18 @@ Status: proposed
 
 ## Plan
 
-- TypeScript（纯 JS 实现的 6.x 编译器）直接编译成浏览器原生 ES 模块，不用打包器；Canvas 2D 画战场，Web Audio 合成声音，界面用原生 DOM 加自写的 JSX 工厂。运行时没有第三方依赖。
-- 用零依赖的 Node.js 脚本完成依赖检查、构建、本机服务（只绑定 127.0.0.1）、存档接口和打开浏览器。`npm start` 是通用入口，另附 macOS `.command` 和 Windows `.cmd` 双击启动脚本。
-- 不用带平台原生二进制的工具链（Vite/esbuild/rollup、TypeScript 7、Electron、Tauri），减少 macOS/Windows 首次安装失败的可能。
-- 规则模拟放在不依赖 DOM 的 `src/core`，用 Node 内置测试运行器测试；Playwright 只作为可选的端到端与截图检查。
+- 以 Electron 桌面客户端交付（用户 2026-09-24 追加要求“我想要客户端”）。主进程只负责窗口、`app://` 本地资源协议和存档读写；页面在上下文隔离加沙盒中运行，只通过预加载脚本拿到存档与窗口接口。
+- 游戏本体仍用 TypeScript（纯 JS 实现的 6.x 编译器）直接编译成原生 ES 模块：Canvas 2D 画战场，Web Audio 合成声音，界面用原生 DOM 加自写的 JSX 工厂，运行时没有第三方依赖。Electron 自带的 Chromium 保证两个平台画面和声音一致。
+- 从源码运行：`npm start` 或双击启动脚本。首次自动安装依赖、下载 Electron（官方源失败时改用 npmmirror 镜像）并构建，然后打开游戏窗口。要求 Node.js 22.12 以上（Electron 44 安装工具的要求）。
+- 打包用 electron-builder：macOS 出 Intel 与 Apple 芯片通用的 dmg，只做 ad-hoc 签名、不公证；Windows 出 NSIS 安装包和免安装版，不签名。GitHub Actions（用户同意用 CI 打包，并已把仓库设为公开）在 macOS 与 Windows 机器上打包，再启动打包好的客户端做冒烟测试；推送 `v*` 标签时发布 Release。
+- 取舍：Electron 体积大（安装包 100 MB 以上），换来两个平台一致的渲染与音频和成熟的打包链。Tauri 需要 Rust 工具链，且 macOS 上是 Safari 内核，没有采用。
+- 规则模拟放在不依赖 DOM 的 `src/core`，用 Node 内置测试运行器测试；Playwright 直接驱动客户端做端到端测试。
 
 ## Acceptance criteria
 
-- 干净检出后执行 `npm start` 能自动装依赖、构建、在 127.0.0.1 上启动并打开浏览器。
-- 两个平台各有启动脚本；游戏运行时不发起外部网络请求。
-- 类型检查、单元测试和端到端主流程通过。
+- 干净检出后执行 `npm start`（或双击启动脚本）能自动装依赖、构建并打开游戏窗口。
+- CI 在 macOS 与 Windows 上打包成功，并能启动打包好的客户端（冒烟测试通过）。
+- 游戏运行时不发起外部网络请求；类型检查、单元测试和端到端主流程通过。
 
 ## Related materials
 

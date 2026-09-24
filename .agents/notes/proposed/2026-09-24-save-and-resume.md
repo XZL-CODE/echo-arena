@@ -17,13 +17,13 @@ Status: proposed
 ## Plan
 
 - 检查点：战前准备的每次改动、待选奖励和整轮结束时写入。战斗进行中不保存中间状态，中途离开后回到该场战前准备并提示。
-- 存储：本机服务把 JSON 原子写入用户数据目录（macOS `~/Library/Application Support/EchoArena/`，Windows `%APPDATA%\EchoArena\`），并保留上一版备份；没有本机服务时改用浏览器 localStorage。
+- 存储：客户端主进程把 JSON 原子写入用户数据目录（macOS `~/Library/Application Support/EchoArena/`，Windows `%APPDATA%\EchoArena\`），并保留上一版备份；关闭窗口前同步写入。在普通浏览器里开发时改用 localStorage。
 - 窗口失焦或页面隐藏时自动暂停并挂起音频，可在设置中关闭。
 - 新开一轮会覆盖当前进度时二次确认；设置中提供“清除全部存档”。
 
 ## Acceptance criteria
 
-- 关闭页面或停止服务后重新进入，能回到正确的场次与配置，并有说明。
+- 关闭客户端后重新打开，能回到正确的场次与配置，并有说明。
 - 设置修改在重启后保留；重置操作有确认，重置后的状态干净。
 
 ## Related materials

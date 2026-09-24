@@ -1,14 +1,14 @@
-// 一键启动：首次自动安装依赖并构建，然后启动本机服务并打开浏览器。
-// 用法：node scripts/start.mjs [--no-open] [--port 5188]
+// 一键启动客户端：首次自动安装依赖（含 Electron）并构建，然后打开游戏窗口。
+// 用法：node scripts/start.mjs [--attach]
+//   --attach  保持在前台运行（开发时查看日志）；默认打开窗口后脚本立即结束。
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import http from 'node:http';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { build, needsBuild } from './build.mjs';
-import { APP_ID, DEFAULT_PORT, PORT_ATTEMPTS, ROOT_DIR } from './paths.mjs';
-import { createGameServer, listen } from './server.mjs';
+import { ELECTRON_MIRROR, MIN_NODE, ROOT_DIR } from './paths.mjs';
 
-const MIN_NODE_MAJOR = 18;
+const require = createRequire(import.meta.url);
 
 function fail(message) {
   console.error(`\n${message}\n`);
@@ -16,27 +16,47 @@ function fail(message) {
 }
 
 function checkNodeVersion() {
-  const major = Number(process.versions.node.split('.')[0]);
-  if (major < MIN_NODE_MAJOR) {
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  const [needMajor, needMinor] = MIN_NODE;
+  if (major < needMajor || (major === needMajor && minor < needMinor)) {
     fail(
-      `当前 Node.js 版本是 ${process.versions.node}，需要 ${MIN_NODE_MAJOR} 或更新版本。` +
+      `当前 Node.js 版本是 ${process.versions.node}，需要 ${needMajor}.${needMinor} 或更新版本。` +
         '请到 https://nodejs.org 安装 LTS 版后重试。',
     );
   }
 }
 
-function ensureDependencies() {
-  const tscPackage = path.join(ROOT_DIR, 'node_modules', 'typescript', 'package.json');
-  if (fs.existsSync(tscPackage)) return;
-  console.log('首次运行：正在安装构建依赖（只需一次，需要联网）……');
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const result = spawnSync(npm, ['install', '--no-audit', '--no-fund'], {
+function run(command, args, env = process.env) {
+  return spawnSync(command, args, {
     cwd: ROOT_DIR,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    env,
+    shell: process.platform === 'win32' && command.endsWith('.cmd'),
   });
-  if (result.status !== 0 || !fs.existsSync(tscPackage)) {
+}
+
+function ensureDependencies() {
+  const marker = path.join(ROOT_DIR, 'node_modules', 'typescript', 'package.json');
+  const electronPackage = path.join(ROOT_DIR, 'node_modules', 'electron', 'package.json');
+  if (fs.existsSync(marker) && fs.existsSync(electronPackage)) return;
+  console.log('首次运行：正在安装依赖（只需一次，需要联网）……');
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const result = run(npm, ['install', '--no-audit', '--no-fund']);
+  if (result.status !== 0 || !fs.existsSync(marker)) {
     fail('依赖安装失败。请检查网络后重试，或在项目目录手动执行 npm install。');
+  }
+}
+
+/** Electron 程序本体在第一次使用时下载；官方源失败时改用国内镜像再试一次。 */
+function ensureElectronBinary() {
+  const installer = path.join(ROOT_DIR, 'node_modules', 'electron', 'install.js');
+  const attempt = (env) =>
+    spawnSync(process.execPath, [installer], { cwd: ROOT_DIR, stdio: 'inherit', env });
+  if (attempt(process.env).status === 0) return;
+  if (process.env.ELECTRON_MIRROR) fail('Electron 下载失败，请检查网络或 ELECTRON_MIRROR 设置。');
+  console.log(`Electron 下载失败，改用镜像 ${ELECTRON_MIRROR} 重试……`);
+  if (attempt({ ...process.env, ELECTRON_MIRROR }).status !== 0) {
+    fail('Electron 下载失败。请检查网络后重试。');
   }
 }
 
@@ -50,94 +70,30 @@ function ensureBuild() {
   }
 }
 
-function probe(port) {
-  return new Promise((resolve) => {
-    const req = http.get({ host: '127.0.0.1', port, path: '/api/health', timeout: 800 }, (res) => {
-      let body = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => (body += chunk));
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(body).app === APP_ID);
-        } catch {
-          resolve(false);
-        }
-      });
-    });
-    req.on('timeout', () => req.destroy());
-    req.on('error', () => resolve(false));
-  });
+function electronExecutable() {
+  // electron 包的入口返回可执行文件路径；缺失时会尝试下载。
+  return require(path.join(ROOT_DIR, 'node_modules', 'electron'));
 }
 
-function openBrowser(url) {
-  const commands = {
-    darwin: ['open', [url]],
-    win32: ['cmd', ['/c', 'start', '""', url]],
-  };
-  const [command, args] = commands[process.platform] ?? ['xdg-open', [url]];
-  try {
-    const child = spawn(command, args, {
-      stdio: 'ignore',
-      detached: true,
-      windowsVerbatimArguments: process.platform === 'win32',
-    });
-    child.on('error', () => console.log(`无法自动打开浏览器，请手动访问：${url}`));
-    child.unref();
-  } catch {
-    console.log(`无法自动打开浏览器，请手动访问：${url}`);
-  }
-}
-
-function parseArgs(argv) {
-  const options = { open: !process.env.ECHO_ARENA_NO_OPEN, port: DEFAULT_PORT };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--no-open') options.open = false;
-    else if (argv[i] === '--port') options.port = Number(argv[++i]);
-  }
-  return options;
-}
-
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
+function main() {
+  const attach = process.argv.includes('--attach');
   checkNodeVersion();
   ensureDependencies();
+  ensureElectronBinary();
   ensureBuild();
 
-  const { server, store } = createGameServer();
-  let port = null;
-  for (let candidate = options.port; candidate < options.port + PORT_ATTEMPTS; candidate++) {
-    if (await probe(candidate)) {
-      const url = `http://127.0.0.1:${candidate}/`;
-      console.log(`游戏服务已经在运行：${url}`);
-      if (options.open) openBrowser(url);
-      return;
-    }
-    try {
-      port = await listen(server, candidate);
-      break;
-    } catch (error) {
-      if (error.code !== 'EADDRINUSE') fail(`启动本机服务失败：${error.message}`);
-    }
+  const executable = electronExecutable();
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  if (attach) {
+    const child = spawn(executable, [ROOT_DIR], { stdio: 'inherit', env });
+    child.on('exit', (code) => process.exit(code ?? 0));
+    return;
   }
-  if (port === null) {
-    fail(`端口 ${options.port}–${options.port + PORT_ATTEMPTS - 1} 都被占用，无法启动。`);
-  }
-
-  const url = `http://127.0.0.1:${port}/`;
-  console.log('');
-  console.log('  回声竞技场已启动');
-  console.log(`  游戏地址：${url}`);
-  console.log(`  存档位置：${store.savePath}`);
-  console.log('  游玩期间请保持此窗口打开；关闭窗口或按 Ctrl+C 即停止游戏服务。');
-  console.log('');
-  if (options.open) openBrowser(url);
-
-  const stop = () => {
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 500).unref();
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
+  const child = spawn(executable, [ROOT_DIR], { stdio: 'ignore', detached: true, env });
+  child.on('error', (error) => fail(`无法启动游戏窗口：${error.message}`));
+  child.unref();
+  console.log('\n  回声竞技场已启动，这个终端窗口可以关闭了。\n');
 }
 
-main().catch((error) => fail(`启动失败：${error instanceof Error ? error.message : error}`));
+main();

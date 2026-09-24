@@ -1,0 +1,113 @@
+# 检查、测试，并在 macOS 与 Windows 上打包桌面客户端；推送 v* 标签时发布 Release。
+name: 构建与打包
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 检查与测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - name: 允许 Electron 沙盒（Ubuntu 24.04 默认限制非特权命名空间）
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: 端到端测试（Linux 客户端）
+        run: xvfb-run -a npm run test:e2e
+      - name: 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screens-linux
+          path: test-results/
+          if-no-files-found: ignore
+
+  package:
+    name: 打包 ${{ matrix.name }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            script: dist:mac
+            unpacked: release/mac-universal
+            files: release/*.dmg
+          - name: Windows
+            os: windows-latest
+            script: dist:win
+            unpacked: release/win-unpacked
+            files: release/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 打包
+        run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: 冒烟测试（启动打包好的客户端）
+        run: npx playwright test tests/e2e/smoke.spec.ts
+        env:
+          ECHO_ARENA_EXECUTABLE: ${{ matrix.unpacked }}
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: EchoArena-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+      - name: 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screens-${{ matrix.name }}
+          path: test-results/
+          if-no-files-found: ignore
+
+  release:
+    name: 发布 Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: EchoArena-*
+          path: artifacts
+          merge-multiple: true
+      - name: 创建 Release 并上传安装包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" * \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "回声竞技场 $GITHUB_REF_NAME" \
+            --generate-notes
