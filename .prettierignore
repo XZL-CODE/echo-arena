@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+test-results/
+playwright-report/
+package-lock.json
+AGENTS.md
+CLAUDE.md
+.agents/
+相关材料/

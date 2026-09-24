@@ -1,0 +1,28 @@
+{
+  "name": "echo-arena",
+  "version": "0.1.0",
+  "private": true,
+  "description": "回声竞技场：可在 macOS 与 Windows 本地离线游玩的单人短局战术小游戏",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "serve": "node scripts/server.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "node scripts/run-tests.mjs",
+    "test:e2e": "playwright test",
+    "balance": "node scripts/run-tests.mjs --balance",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "^22.10.0",
+    "prettier": "^3.8.1",
+    "typescript": "~6.0.3"
+  }
+}

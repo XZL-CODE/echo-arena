@@ -1,0 +1,26 @@
+#!/bin/bash
+# 回声竞技场 macOS 启动脚本：双击运行。
+# 首次运行会自动安装依赖并构建（需要联网），之后可离线游玩。
+cd "$(dirname "$0")" || exit 1
+
+# 从 Finder 打开的终端可能没有加载 Homebrew / nvm 的 PATH，这里补上常见位置。
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+if ! command -v node >/dev/null 2>&1 && [ -s "$HOME/.nvm/nvm.sh" ]; then
+  . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo ""
+  echo "没有找到 Node.js。请先安装 Node.js 18 或更新版本："
+  echo "https://nodejs.org （下载 LTS 版），安装后重新双击本文件。"
+  echo ""
+  read -r -p "按回车键关闭……" _
+  exit 1
+fi
+
+node scripts/start.mjs "$@"
+status=$?
+if [ $status -ne 0 ]; then
+  read -r -p "启动失败，请查看上方信息。按回车键关闭……" _
+fi
+exit $status
