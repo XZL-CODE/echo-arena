@@ -55,6 +55,11 @@ interface FloatText {
   vy: number;
   /** 回响标注的等级（普通文字为 0）。 */
   echo: number;
+  /** 伤害数字所属的单位（其它文字为 0），用来合并短时间内的连续命中。 */
+  target: number;
+  amount: number;
+  /** 出现至今的时间（合并时 life 会被重置，age 不会）。 */
+  age: number;
 }
 
 const MAX_PARTICLES = 700;
@@ -176,9 +181,71 @@ export class Fx {
     max = 0.9,
     vy = -40,
     echo = 0,
-  ): void {
+  ): FloatText {
     if (this.texts.length >= MAX_TEXTS) this.texts.shift();
-    this.texts.push({ x, y, text, color, size, life: 0, max, vy, echo });
+    const t: FloatText = {
+      x,
+      y,
+      text,
+      color,
+      size,
+      life: 0,
+      max,
+      vy,
+      echo,
+      target: 0,
+      amount: 0,
+      age: 0,
+    };
+    this.texts.push(t);
+    return t;
+  }
+
+  /**
+   * 飘字数值：同一单位 0.3 秒内的连续数值累加到同一个数字上，大乱斗时不刷屏。
+   * key 用单位编号区分（伤害为正、治疗为负）。
+   */
+  private floatNumber(
+    key: number,
+    x: number,
+    y: number,
+    amount: number,
+    color: string,
+    size: number,
+    prefix = '',
+  ): void {
+    const recent = this.texts.find((t) => t.target === key && t.life < 0.3 && t.age < 0.6);
+    if (recent) {
+      recent.amount += amount;
+      recent.text = prefix + String(Math.round(recent.amount));
+      recent.life = Math.min(recent.life, 0.08);
+      recent.vy = Math.min(recent.vy, -30);
+      if (size >= recent.size) {
+        recent.size = Math.min(26, size + 1);
+        recent.color = color;
+      } else {
+        recent.size = Math.min(26, recent.size + 0.5);
+      }
+      return;
+    }
+    const jx = x + (this.rand() - 0.5) * 14;
+    const text = prefix + String(Math.round(amount));
+    const t = this.text(jx, this.freeY(jx, y), text, color, size, 0.75, -44);
+    t.target = key;
+    t.amount = amount;
+  }
+
+  /** 新数字若压在附近刚出现的文字上，就依次往上错开，连环爆炸时数字不叠成一团。 */
+  private freeY(x: number, y: number): number {
+    let top = y;
+    for (let pass = 0; pass < 4; pass++) {
+      const hit = this.texts.find(
+        (t) => t.life < 0.35 && Math.abs(t.x - x) < 30 && Math.abs(t.y - top) < 15,
+      );
+      if (!hit) break;
+      top = hit.y - 17;
+    }
+    return top;
   }
 
   /** 把一批模拟事件转换成特效。 */
@@ -205,15 +272,7 @@ export class Fx {
             const size = e.echo > 0 ? 15 + Math.min(8, e.echo * 2) : 13;
             const textColor =
               e.team === 0 ? (e.echo > 0 ? echoColor(e.echo) : '#fff8ea') : '#ff9a8a';
-            this.text(
-              e.x + (this.rand() - 0.5) * 14,
-              e.y - 26,
-              String(Math.round(e.amount)),
-              textColor,
-              size,
-              0.7,
-              -46,
-            );
+            this.floatNumber(e.targetId, e.x, e.y - 26, e.amount, textColor, size);
           }
           if (e.echo >= 4) {
             this.hitstop = Math.max(this.hitstop, 0.07);
@@ -285,8 +344,9 @@ export class Fx {
             additive: false,
             max: 0.7,
           });
-          if (this.options.damageNumbers)
-            this.text(e.x, e.y - 30, `+${Math.round(e.amount)}`, PALETTE.heal, 13, 0.8, -36);
+          if (this.options.damageNumbers && e.amount >= 1) {
+            this.floatNumber(-e.targetId, e.x, e.y - 30, e.amount, PALETTE.heal, 13, '+');
+          }
           break;
         case 'pulse':
           if (e.kind === 'heal') this.ring(e.x, e.y, 10, e.radius, PALETTE.heal, 0.55, 3, 0.08);
@@ -425,6 +485,7 @@ export class Fx {
     this.beams = this.beams.filter((b) => b.life < b.max);
     for (const t of this.texts) {
       t.life += dt;
+      t.age += dt;
       t.y += t.vy * dt;
       t.vy *= Math.exp(-2.5 * dt);
     }

@@ -145,6 +145,7 @@ export class ArenaController {
     for (let i = 0; i < steps && !world.result; i++) {
       world.step();
       this.flushEvents();
+      this.renderer.fx.update(SIM.dt);
     }
   }
 

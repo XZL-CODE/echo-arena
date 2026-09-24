@@ -2,7 +2,13 @@
 import { AudioEngine } from '../audio/audio.js';
 import { encounterById } from '../core/content/encounters.js';
 import { autoEquip, emptyLoadout } from '../core/run/loadout.js';
-import { createRun, currentEncounter, defaultFormation, RUN_LENGTH } from '../core/run/run.js';
+import {
+  createRun,
+  currentEncounter,
+  defaultFormation,
+  ensureGadgets,
+  RUN_LENGTH,
+} from '../core/run/run.js';
 import { defaultSettings, type Settings } from '../core/run/save.js';
 import type { BattleConfig } from '../core/sim/world.js';
 import type { Difficulty, ModuleId, ModuleLevel } from '../core/types.js';
@@ -142,10 +148,34 @@ export class App {
       mode: () => this.arena.mode,
       result: () => this.arena.world?.result ?? null,
       run: () => this.persistence.data.run,
-      cast: (kind: 'guard' | 'slinger' | 'bell') => {
+      cast: (kind: 'guard' | 'slinger' | 'bell', x?: number, y?: number) => {
         const world = this.arena.world;
         const target = world?.aliveOf(1)[0];
-        return !!(world && target && world.castActive(kind, target.x, target.y));
+        if (!world || !target) return false;
+        const ok = world.castActive(kind, x ?? target.x, y ?? target.y);
+        return ok;
+      },
+      /** 直接摆出某场对局与招式组合（用于截图检查与端到端测试）。 */
+      setupRun: (encounterId: string, modules: Array<[ModuleId, ModuleLevel]>, matchIndex = 0) => {
+        const run = createRun(4321, 'normal');
+        run.order[matchIndex] = encounterId;
+        run.matchIndex = matchIndex;
+        const record = run.records[matchIndex];
+        if (record) record.encounterId = encounterId;
+        let loadout = emptyLoadout();
+        const levels: Partial<Record<ModuleId, ModuleLevel>> = {};
+        for (const [id, level] of modules) {
+          levels[id] = level;
+          loadout = autoEquip(loadout, id) ?? loadout;
+        }
+        run.levels = levels;
+        run.loadout = loadout;
+        run.formation = ensureGadgets(run.formation, levels, loadout);
+        this.persistence.update((d) => {
+          d.run = run;
+        }, true);
+        this.game?.destroy();
+        this.enterGame();
       },
     };
   }

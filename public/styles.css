@@ -721,7 +721,14 @@ body {
   font-size: 13px;
 }
 
-.overtime:empty {
+.waves-line {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.overtime:empty,
+.waves-line:empty {
   display: none;
 }
 

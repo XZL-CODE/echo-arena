@@ -109,6 +109,7 @@ export class GameScreen {
   private hud: {
     timer: HTMLElement | null;
     remaining: HTMLElement | null;
+    waves: HTMLElement | null;
     echo: HTMLElement | null;
     focus: HTMLElement | null;
     overtime: HTMLElement | null;
@@ -119,6 +120,7 @@ export class GameScreen {
   } = {
     timer: null,
     remaining: null,
+    waves: null,
     echo: null,
     focus: null,
     overtime: null,
@@ -837,6 +839,7 @@ export class GameScreen {
       { class: 'remaining', 'data-testid': 'remaining' },
       '',
     ) as HTMLElement;
+    this.hud.waves = h('span', { class: 'waves-line' }, '') as HTMLElement;
     this.hud.overtime = h('span', { class: 'overtime' }, '') as HTMLElement;
     this.hud.focus = h('div', { class: 'focus-line' }, '') as HTMLElement;
     this.hud.echo = h('b', null, '0') as HTMLElement;
@@ -851,6 +854,7 @@ export class GameScreen {
           'div',
           { class: 'hud-block hud-goal' },
           h('div', { class: 'goal-line' }, uiIcon('target', 16), this.hud.remaining),
+          this.hud.waves,
           this.hud.overtime,
           h(
             'div',
@@ -933,9 +937,8 @@ export class GameScreen {
     const key = `${enemies}|${waves}|${world.overtimeLevel}|${focus?.id ?? 0}|${world.stats.maxEcho}`;
     if (!force && key === this.hud.cache) return;
     this.hud.cache = key;
-    if (this.hud.remaining) {
-      this.hud.remaining.textContent = `还剩 ${enemies} 个对手${waves > 0 ? ` · 还有 ${waves} 波` : ''}`;
-    }
+    if (this.hud.remaining) this.hud.remaining.textContent = `还剩 ${enemies} 个对手`;
+    if (this.hud.waves) this.hud.waves.textContent = waves > 0 ? `还有 ${waves} 波援军会赶来` : '';
     if (this.hud.overtime) {
       this.hud.overtime.textContent =
         world.overtimeLevel > 0 ? `加时：所有伤害 ×${world.overtimeMult().toFixed(1)}` : '';
