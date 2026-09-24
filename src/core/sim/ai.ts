@@ -384,13 +384,16 @@ function updateSlinger(world: World, u: Unit, dt: number): void {
   const hasShot = rubber || clearShot(world, u, target);
   const canShoot = u.cooldown <= 0 && d <= u.def.range && hasShot;
 
-  // 被近战贴身时后撤，同时见缝插针地射击。
+  // 被近战贴身时后撤，同时见缝插针地射击；连续后撤有时间上限，避免被追着绕场拖长战斗。
   const threat = nearestOpponent(world, u.x, u.y, u.team);
-  if (threat && threat.def.range <= 30 && edgeDist(u, threat) < 70) {
+  const threatened = threat !== null && threat.def.range <= 30 && edgeDist(u, threat) < 70;
+  if (!threatened) u.timerB = Math.max(0, u.timerB - dt * 0.5);
+  if (threat && threatened && u.timerB < KITE_LIMIT) {
     if (canShoot) {
       startWindup(u, u.def.windup, target.id);
       return;
     }
+    u.timerB += dt;
     const to = retreatPoint(world, u, threat);
     moveToward(world, u, to.x, to.y);
     u.state = 'move';
@@ -414,8 +417,9 @@ function fireSlinger(world: World, u: Unit, t: Unit): void {
   const big = heavy >= 2 && u.shots % 3 === 0;
   const speed = heavy > 0 ? 500 : (u.def.projectileSpeed ?? 560);
   const lead = dist(u.x, u.y, t.x, t.y) / speed;
-  const tvx = (t.x - t.px) / SIM.dt;
-  const tvy = (t.y - t.py) / SIM.dt;
+  // 目标当前的移动速度（行走 + 被击退）。
+  const tvx = t.mvx + t.vx;
+  const tvy = t.mvy + t.vy;
   const dir = normalize(t.x + tvx * lead * 0.8 - u.x, t.y + tvy * lead * 0.8 - u.y, 1, 0);
   u.facing = Math.atan2(dir.y, dir.x);
   u.attackAt = world.t;
@@ -572,9 +576,13 @@ function updateArcher(world: World, u: Unit, dt: number): void {
   if (u.state === 'windup') {
     const t = world.unitById(u.targetId);
     if (t && t.alive) {
+      // 预判目标走位（只算一部分，走动中的目标仍有机会躲开）。
+      const lead = (dist(u.x, u.y, t.x, t.y) / (u.def.projectileSpeed ?? 430)) * ARCHER_LEAD;
+      const tx = t.x + (t.mvx + t.vx) * lead;
+      const ty = t.y + (t.mvy + t.vy) * lead;
       const k = Math.min(1, dt * 4);
-      u.aimX += (t.x - u.aimX) * k;
-      u.aimY += (t.y - u.aimY) * k;
+      u.aimX += (tx - u.aimX) * k;
+      u.aimY += (ty - u.aimY) * k;
     }
     face(u, u.aimX, u.aimY, dt, 2);
     u.stateTime -= dt;
@@ -598,6 +606,9 @@ function updateArcher(world: World, u: Unit, dt: number): void {
 }
 
 const ARCHER_HOLD_TIME = 9;
+/** 小弹连续后撤的最长时间（秒），之后站定射击，等威胁解除再恢复。 */
+const KITE_LIMIT = 2.5;
+const ARCHER_LEAD = 0.7;
 
 function fireArrow(world: World, u: Unit): void {
   const angle = Math.atan2(u.aimY - u.y, u.aimX - u.x) + u.rng.range(-0.05, 0.05);
@@ -795,7 +806,7 @@ function updateJack(world: World, u: Unit, dt: number): void {
 
 const JACK_SPAWN_LIMIT = 6;
 
-const KING_FAN_INTERVAL = [2.8, 3.5, 4.2];
+const KING_FAN_INTERVAL = [3.2, 3.8, 4.4];
 
 function updateKing(world: World, u: Unit, dt: number): void {
   const ratio = u.hp / u.maxHp;
@@ -881,7 +892,7 @@ function performKingAction(world: World, u: Unit, action: string): void {
         vx: Math.cos(a) * speed,
         vy: Math.sin(a) * speed,
         radius: u.def.projectileRadius ?? 7,
-        damage: 10,
+        damage: 7,
         ownerId: u.id,
         source: 'enemy',
         life: 3.6,

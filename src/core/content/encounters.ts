@@ -124,7 +124,7 @@ export const ENCOUNTERS: EncounterDef[] = [
       ...column('shell', 850, [280, 400]),
       ...column('archer', 1010, [190, 470]),
       { kind: 'snail', x: 1100, y: 330 },
-      ...column('mouse', 1070, [130, 530]),
+      { kind: 'mouse', x: 1070, y: 530 },
       { kind: 'brute', x: 900, y: 150 },
     ],
     relevant: ['ricochet', 'impact', 'burst', 'mend', 'vortex', 'reflect'],

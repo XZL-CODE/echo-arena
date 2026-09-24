@@ -68,7 +68,9 @@ const SOURCE_OWNER: Partial<Record<DamageSource, PlayerUnitKind>> = {
   magnet: 'bell',
 };
 
-export const MATCH_SCALING = 0.04;
+export const MATCH_SCALING = 0.08;
+/** 每往后一场，对手伤害提高的比例。 */
+export const MATCH_DAMAGE_SCALING = 0.04;
 
 export class World {
   readonly width = ARENA.width;
@@ -108,7 +110,7 @@ export class World {
     this.rng = new Rng(hashSeed(config.seed, 'battle', config.encounter.id));
     const diff = DIFFICULTY_MULT[config.difficulty];
     this.enemyHpMult = diff.enemyHp * (1 + MATCH_SCALING * config.matchIndex);
-    this.enemyDamageMult = diff.enemyDamage;
+    this.enemyDamageMult = diff.enemyDamage * (1 + MATCH_DAMAGE_SCALING * config.matchIndex);
     this.equipped = equippedLevels(config.loadout, config.levels);
     this.waves = [...(config.encounter.waves ?? [])].sort((a, b) => a.at - b.at);
 
