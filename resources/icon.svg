@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c48a57"/>
+      <stop offset="0.55" stop-color="#8a5a35"/>
+      <stop offset="1" stop-color="#553220"/>
+    </linearGradient>
+    <radialGradient id="felt" cx="0.5" cy="0.42" r="0.7">
+      <stop offset="0" stop-color="#4a9078"/>
+      <stop offset="0.6" stop-color="#2f6d58"/>
+      <stop offset="1" stop-color="#1c4538"/>
+    </radialGradient>
+    <radialGradient id="bead" cx="0.38" cy="0.32" r="0.75">
+      <stop offset="0" stop-color="#fff1b8"/>
+      <stop offset="0.45" stop-color="#ffd35c"/>
+      <stop offset="1" stop-color="#e8a431"/>
+    </radialGradient>
+    <clipPath id="table"><rect x="112" y="112" width="800" height="800" rx="120"/></clipPath>
+  </defs>
+  <rect x="24" y="24" width="976" height="976" rx="220" fill="url(#wood)" stroke="#241a1f" stroke-width="16"/>
+  <rect x="112" y="112" width="800" height="800" rx="120" fill="url(#felt)" stroke="#1b3a30" stroke-width="10"/>
+  <g clip-path="url(#table)" fill="none" stroke-linecap="round">
+    <circle cx="512" cy="530" r="340" stroke="#ff6fb5" stroke-width="30" opacity="0.6"/>
+    <circle cx="512" cy="535" r="268" stroke="#ffe066" stroke-width="36" opacity="0.8"/>
+    <circle cx="512" cy="540" r="200" stroke="#7ee8fa" stroke-width="42"/>
+  </g>
+  <circle cx="512" cy="540" r="122" fill="url(#bead)" stroke="#241a1f" stroke-width="18"/>
+  <ellipse cx="468" cy="492" rx="34" ry="20" fill="#ffffff" opacity="0.7" transform="rotate(-30 468 492)"/>
+  <ellipse cx="478" cy="548" rx="17" ry="24" fill="#241a1f"/>
+  <ellipse cx="552" cy="548" rx="17" ry="24" fill="#241a1f"/>
+  <circle cx="483" cy="540" r="6" fill="#ffffff"/>
+  <circle cx="557" cy="540" r="6" fill="#ffffff"/>
+  <g fill="#fff4dc" opacity="0.85">
+    <path d="M512 50 l13 18 -13 18 -13 -18z"/>
+    <path d="M300 50 l13 18 -13 18 -13 -18z"/>
+    <path d="M724 50 l13 18 -13 18 -13 -18z"/>
+  </g>
+</svg>
