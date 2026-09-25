@@ -99,4 +99,4 @@
 | `npm run balance`                      | 自动对战数值报告                       |
 | `npm run dist:mac` / `dist:win`        | 在对应系统上打包，输出到 `release/`    |
 
-代码结构：`src/core` 是不依赖界面的规则与内容（单位、招式、对局、回响、一轮流程、存档格式）；`src/render` 画战场，`src/audio` 合成声音，`src/game` 连接规则与画面，`src/ui` 是界面；`electron/` 是客户端外壳（窗口、本地资源协议、存档读写）。推送 `v*` 标签，或在 Actions 里手动运行“构建与打包”并填写版本号（如 `v0.2.0`）时，CI 会在测试通过后把安装包发布到 Releases。
+代码结构：`src/core` 是不依赖界面的规则与内容（单位、招式、对局、回响、一轮流程、存档格式）；`src/render` 画战场，`src/audio` 合成声音，`src/game` 连接规则与画面，`src/ui` 是界面；`electron/` 是客户端外壳（窗口、本地资源协议、存档读写）。代码合并到 `main` 后，CI 在测试通过后把安装包发布到 Releases，版本号取 `package.json` 的 `version`（这个版本已发布过就跳过，发新版先改版本号）；推送 `v*` 标签，或在 Actions 里手动运行“构建与打包”并填写版本号，也会发布。

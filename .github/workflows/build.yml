@@ -1,5 +1,5 @@
 # 检查、测试；在 macOS 与 Windows 上打包桌面客户端并对打包结果跑端到端测试，
-# 同时验证从源码用启动脚本运行；推送 v* 标签，或手动运行并填写版本号时发布 Release。
+# 同时验证从源码用启动脚本运行；合并到默认分支、推送 v* 标签或手动运行并填写版本号时发布 Release。
 name: 构建与打包
 
 on:
@@ -124,12 +124,19 @@ jobs:
 
   release:
     name: 发布 Release
-    if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.release, 'v')
+    # 三种情况发布：推送 v* 标签；手动运行并填写版本号；推送（合并）到默认分支，
+    # 此时版本号取 package.json，这个版本已经发布过就跳过。
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      startsWith(inputs.release, 'v') ||
+      (github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     needs: [package, source]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: EchoArena-*
@@ -138,14 +145,19 @@ jobs:
       - name: 创建 Release 并上传安装包
         env:
           GH_TOKEN: ${{ github.token }}
-          # 推送标签时用标签名；手动运行时用填写的版本号，并在当前提交上新建标签。
+          # 推送标签时用标签名；手动运行时用填写的版本号；推送到默认分支时为空，改用 package.json。
           TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release }}
         run: |
+          tag="${TAG:-v$(jq -r .version package.json)}"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag 已存在，跳过。要发布新版本，先修改 package.json 里的 version。"
+            exit 0
+          fi
           cd artifacts
           sha256sum * > SHA256SUMS.txt
-          gh release create "$TAG" * \
+          gh release create "$tag" * \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "回声竞技场 $TAG" \
-            --notes "macOS 下载 .dmg（Apple 芯片与 Intel 通用）；Windows 下载 -win-setup.exe（安装版）或 -win-portable.exe（免安装）。安装包未签名，首次打开的办法、操作与玩法见 [README](https://github.com/$GITHUB_REPOSITORY/blob/$TAG/README.md)。" \
+            --title "回声竞技场 $tag" \
+            --notes "macOS 下载 .dmg（Apple 芯片与 Intel 通用）；Windows 下载 -win-setup.exe（安装版）或 -win-portable.exe（免安装）。安装包未签名，首次打开的办法、操作与玩法见 [README](https://github.com/$GITHUB_REPOSITORY/blob/$tag/README.md)。" \
             --generate-notes
