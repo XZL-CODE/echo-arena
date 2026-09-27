@@ -86,10 +86,12 @@ test('新安装：战前、开战、回响、结算、挑奖励依次教，照�
   await expect(guideTitle(page)).toHaveText('先看对手');
   await page.click('[data-testid=guide-next]');
 
-  // 要照做的步骤没有“下一步”，点亮出来的地方以外也没有反应。
+  // 要照做的步骤没有“下一步”，点亮出来的地方以外也没有反应（顶栏的菜单按钮点了不弹菜单）。
+  // 说明卡片可能盖住侧栏里的其它按钮（取决于窗口大小和字体），所以拿左上角的菜单按钮来点。
   await expect(guideTitle(page)).toHaveText('选一个开局招式');
-  await page.locator('[data-testid=fight]').click();
-  await expect(page.locator('[data-testid=battle-hud]')).toBeHidden();
+  await page.locator('.topbar [data-testid=menu]').click();
+  await page.waitForTimeout(300);
+  await expect(page.locator('.modal-layer [data-testid=menu]')).toHaveCount(0);
   await expect(guideTitle(page)).toHaveText('选一个开局招式');
   await page.click('[data-testid=starter-reflect]');
   await expect(guideTitle(page)).toHaveText('拖动队员，摆好站位');
@@ -102,8 +104,12 @@ test('新安装：战前、开战、回响、结算、挑奖励依次教，照�
   await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
   await expect(guideTitle(page)).toHaveText('点一个对手，集火它');
   const timer = page.locator('[data-testid=timer]');
+  const pauseButton = page.locator('[data-testid=pause]');
+  await expect(pauseButton).toContainText('继续');
+  // 这一步不放行空格：按了战斗也不会开始。
   await page.keyboard.press('Space');
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(300);
+  await expect(pauseButton).toContainText('继续');
   await expect(timer).toHaveText('0:00');
   await expect(guideTitle(page)).toHaveText('点一个对手，集火它');
   await tapHand(page);

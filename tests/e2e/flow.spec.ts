@@ -208,9 +208,9 @@ test('战前换起手招式；战斗中空格暂停、失焦自动暂停，按 1
   await page.evaluate(() => (window as unknown as HookWindow).__echo.fastForward(2));
   await page.keyboard.press('Space');
   await expect(banner).toContainText('已暂停');
-  await page.waitForTimeout(300);
+  // 计时器在下一帧才刷新（没有显卡的 CI 虚拟机上一帧可能很慢），等它反映出快进的 2 秒。
+  await expect(timer).not.toHaveText('0:00');
   const frozen = (await timer.textContent()) ?? '';
-  expect(frozen).not.toBe('0:00');
   await page.waitForTimeout(1500);
   await expect(timer).toHaveText(frozen);
   await page.keyboard.press('Space');
