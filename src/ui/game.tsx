@@ -33,7 +33,7 @@ import {
   setLoadout,
   type RunState,
 } from '../core/run/run.js';
-import type { Settings } from '../core/run/save.js';
+import { GUIDE_PARTS, type GuidePart, type Settings } from '../core/run/save.js';
 import type { SimEvent } from '../core/sim/events.js';
 import type { World } from '../core/sim/world.js';
 import {
@@ -48,6 +48,8 @@ import type { Persistence } from '../game/persistence.js';
 import { portrait } from '../render/portrait.js';
 import type { Looks } from '../render/renderer.js';
 import { cx, h, mount, type Child } from './dom.js';
+import type { ArenaRect, Guide } from './guide.js';
+import { GUIDE_LABEL, guideOverview, guideSteps, type GuideTopic } from './guide-steps.js';
 import { FAMILY_COLORS, moduleIcon, uiIcon } from './icons.js';
 import { button, iconButton, kbd } from './widgets.js';
 
@@ -60,6 +62,7 @@ export interface GameHost {
   overlay: HTMLElement;
   stageTop: HTMLElement;
   stageBottom: HTMLElement;
+  guide: Guide;
   toast(text: string): void;
   confirm(title: string, body: string, ok: string): Promise<boolean>;
   openSettings(): void;
@@ -105,7 +108,7 @@ export class GameScreen {
   private selection: Selection = null;
   private summary: BattleSummary | null = null;
   private rewardPick: ModuleId | null = null;
-  private pauseReason: 'user' | 'blur' | null = null;
+  private pauseReason: 'user' | 'blur' | 'guide' | null = null;
   private hud: {
     timer: HTMLElement | null;
     remaining: HTMLElement | null;
@@ -130,8 +133,10 @@ export class GameScreen {
     cache: '',
   };
   private banner: HTMLElement | null = null;
-  private hintShown = false;
   private highlight: EnemyUnitKind | null = null;
+  /** 正在显示的指引段落，以及它是不是新安装后自动出现的。 */
+  private guideTopic: GuideTopic | 'overview' | null = null;
+  private guideAuto = false;
 
   constructor(host: GameHost) {
     this.host = host;
@@ -170,6 +175,7 @@ export class GameScreen {
   }
 
   destroy(): void {
+    this.host.guide.close();
     this.host.arena.hooks = {};
     this.host.arena.clear();
     mount(this.host.overlay);
@@ -199,6 +205,7 @@ export class GameScreen {
   }
 
   enterPrep(): void {
+    this.dismissGuide();
     let run = this.run;
     if (run.inBattle) {
       run = leaveBattle(run);
@@ -217,6 +224,7 @@ export class GameScreen {
     this.renderTopbar();
     this.renderPrepHeader();
     this.renderPrepSide();
+    this.autoGuide('prep');
   }
 
   private rebuildPreview(): void {
@@ -228,6 +236,7 @@ export class GameScreen {
 
   startBattle(): void {
     if (this.view !== 'prep' && this.view !== 'result') return;
+    this.dismissGuide();
     const run = beginBattle(this.run);
     this.setRun(run, true);
     this.view = 'battle';
@@ -246,10 +255,11 @@ export class GameScreen {
     this.banner = null;
     this.renderTopbar();
     this.renderBattleHud();
-    this.maybeBattleHint();
+    this.autoGuide('battle');
   }
 
   private onBattleEnd(world: World): void {
+    this.dismissGuide();
     const stats = world.stats;
     let run = finishBattle(this.run, stats);
     this.host.persistence.update((d) => {
@@ -270,6 +280,7 @@ export class GameScreen {
     this.host.audio.setDucked(true);
     this.renderTopbar();
     this.renderResult();
+    this.autoGuide('result');
   }
 
   private retrySame(): void {
@@ -309,6 +320,7 @@ export class GameScreen {
       right.push(this.hud.timer, this.hud.pauseBtn, this.hud.speedBtn);
     }
     right.push(
+      iconButton('help', '新手指引', () => this.openGuide(), 'guide-open'),
       iconButton(
         this.settings.muted ? 'mute' : 'sound',
         this.settings.muted ? '取消静音（M）' : '静音（M）',
@@ -1001,7 +1013,7 @@ export class GameScreen {
     this.banner?.remove();
     this.banner = null;
     let text: Child = null;
-    if (this.view === 'battle' && arena.paused) {
+    if (this.view === 'battle' && arena.paused && this.pauseReason !== 'guide') {
       text =
         this.pauseReason === 'blur'
           ? '窗口失去焦点，已自动暂停 · 按空格继续'
@@ -1017,22 +1029,6 @@ export class GameScreen {
       text,
     ) as HTMLElement;
     this.host.overlay.appendChild(this.banner);
-  }
-
-  private maybeBattleHint(): void {
-    if (this.hintShown) return;
-    const seen = this.settings.seenHints;
-    if (seen.includes('battle-basics')) return;
-    this.hintShown = true;
-    const world = this.host.arena.world;
-    const active = PLAYER_UNITS.map((k) => world?.playerUnit(k)).find((u) => u?.active);
-    const skill = active?.active
-      ? `按 ${UNIT_KEYS[active.kind as PlayerUnitKind]} 发动「${MODULE_DEFS[active.active].name}」，`
-      : '';
-    this.host.toast(`${skill}空格随时暂停，点击对手可以集火。`);
-    this.host.persistence.update((d) => {
-      d.settings.seenHints = [...d.settings.seenHints, 'battle-basics'];
-    });
   }
 
   private onEvents(events: SimEvent[], world: World): void {
@@ -1122,6 +1118,7 @@ export class GameScreen {
   }
 
   showReward(): void {
+    this.dismissGuide();
     const run = this.run;
     if (run.phase !== 'reward' || !run.offers) {
       this.enterPrep();
@@ -1232,6 +1229,7 @@ export class GameScreen {
   }
 
   showSummary(): void {
+    this.dismissGuide();
     const run = this.run;
     this.view = 'summary';
     this.host.persistence.update((d) => {
@@ -1332,6 +1330,106 @@ export class GameScreen {
         ),
       ),
     );
+  }
+
+  // ---- 新手指引 ----
+
+  /** 新安装后，这一段还没看过时自动出现。 */
+  private autoGuide(part: GuidePart): void {
+    if (this.settings.guideSeen.includes(part)) return;
+    this.showGuide(part, true);
+  }
+
+  /** 顶栏的“？”：重看当前界面对应的一段。 */
+  private openGuide(): void {
+    const topics: Record<View, GuideTopic | 'overview'> = {
+      prep: 'prep',
+      battle: 'battle',
+      result: 'result',
+      reward: 'reward',
+      summary: 'overview',
+    };
+    this.host.audio.ui('click');
+    this.showGuide(topics[this.view], false);
+  }
+
+  private showGuide(topic: GuideTopic | 'overview', auto: boolean): void {
+    const guide = this.host.guide;
+    const isPart = (t: string): t is GuidePart => (GUIDE_PARTS as readonly string[]).includes(t);
+    guide.show({
+      label: topic === 'overview' ? '全部' : GUIDE_LABEL[topic],
+      steps:
+        topic === 'overview'
+          ? guideOverview()
+          : guideSteps(topic, { enemyArea: () => this.enemyArea() }),
+      skipLabel: auto ? '跳过指引' : '关闭',
+      onDone: () => {
+        if (auto && isPart(topic)) this.markGuide([topic]);
+      },
+      onSkip: () => {
+        if (auto) this.markGuide(GUIDE_PARTS);
+      },
+      onClose: () => {
+        this.guideTopic = null;
+        this.guideAuto = false;
+        this.resumeFromGuide();
+      },
+    });
+    if (!guide.open) return;
+    this.guideTopic = topic;
+    this.guideAuto = auto;
+    if (topic === 'battle') this.pauseForGuide();
+  }
+
+  /** 界面切走时收起指引；自动出现的那一段算看过（例如在“开战”这一步直接点了开战）。 */
+  private dismissGuide(): void {
+    if (!this.host.guide.open) return;
+    const topic = this.guideTopic;
+    const auto = this.guideAuto;
+    this.host.guide.close();
+    if (auto && topic && (GUIDE_PARTS as readonly string[]).includes(topic))
+      this.markGuide([topic as GuidePart]);
+  }
+
+  private markGuide(parts: readonly GuidePart[]): void {
+    this.host.persistence.update((d) => {
+      const seen = d.settings.guideSeen;
+      d.settings.guideSeen = GUIDE_PARTS.filter((p) => seen.includes(p) || parts.includes(p));
+    }, true);
+  }
+
+  /** 讲战斗时先暂停，讲完自动继续（玩家自己暂停的保持暂停）。 */
+  private pauseForGuide(): void {
+    const arena = this.host.arena;
+    if (this.view !== 'battle' || arena.mode !== 'battle' || arena.paused) return;
+    arena.setPaused(true);
+    this.pauseReason = 'guide';
+    this.host.audio.setDucked(true);
+    this.refreshBattleChrome();
+  }
+
+  private resumeFromGuide(): void {
+    const arena = this.host.arena;
+    if (this.pauseReason !== 'guide') return;
+    this.pauseReason = null;
+    if (this.view !== 'battle' || arena.mode !== 'battle' || !arena.paused) return;
+    arena.setPaused(false);
+    this.host.audio.setDucked(false);
+    this.refreshBattleChrome();
+  }
+
+  /** 场上对手所在的区域（竞技场坐标），“集火”一步圈出它们。 */
+  private enemyArea(): ArenaRect | null {
+    const world = this.host.arena.world;
+    const foes = world?.units.filter((u) => u.alive && u.team === 1) ?? [];
+    if (!world || foes.length === 0) return null;
+    const xs = foes.map((u) => u.x);
+    const ys = foes.map((u) => u.y);
+    const x0 = Math.max(0, Math.min(...xs) - 50);
+    const x1 = Math.min(world.width, Math.max(...xs) + 50);
+    const y0 = Math.max(0, Math.min(...ys) - 70);
+    const y1 = Math.min(world.height, Math.max(...ys) + 45);
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   }
 
   // ---- 菜单与按键 ----

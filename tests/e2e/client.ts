@@ -1,6 +1,11 @@
 // 启动客户端：默认用 node_modules 里的 Electron 运行源码；
 // 设置 ECHO_ARENA_EXECUTABLE（文件或打包输出目录）时启动打包后的程序。
-import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import {
+  _electron as electron,
+  expect,
+  type ElectronApplication,
+  type Page,
+} from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -72,6 +77,14 @@ export async function ready(page: Page): Promise<string[]> {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.waitForSelector('body[data-ready]', { timeout: 30_000 });
   return errors;
+}
+
+/** 新安装会在第一场战前准备弹出新手指引；与指引无关的测试先把它跳过。 */
+export async function skipGuide(page: Page): Promise<void> {
+  const skip = page.locator('[data-testid=guide-skip]');
+  await expect(skip).toBeVisible();
+  await skip.click();
+  await expect(page.locator('[data-testid=guide]')).toBeHidden();
 }
 
 /** 读取存档文件；文件不存在时返回 null。 */

@@ -15,7 +15,12 @@ import {
   type RunState,
 } from './run.js';
 
-export const SAVE_VERSION = 1;
+// 版本 2：设置里增加新手指引进度（guideSeen）。
+export const SAVE_VERSION = 2;
+
+/** 新手指引分三段：战前准备、战斗、第一场结算。 */
+export const GUIDE_PARTS = ['prep', 'battle', 'result'] as const;
+export type GuidePart = (typeof GUIDE_PARTS)[number];
 
 export interface Settings {
   masterVolume: number;
@@ -30,6 +35,8 @@ export interface Settings {
   difficulty: Difficulty;
   /** 已经看过的一次性提示。 */
   seenHints: string[];
+  /** 新手指引里已经看过或跳过的部分。全新安装为空，旧版本存档读入时视为全部看过。 */
+  guideSeen: GuidePart[];
 }
 
 export interface Records {
@@ -62,6 +69,7 @@ export function defaultSettings(): Settings {
     damageNumbers: true,
     difficulty: 'normal',
     seenHints: [],
+    guideSeen: [],
   };
 }
 
@@ -124,6 +132,10 @@ function parseSettings(raw: unknown): Settings {
     seenHints: Array.isArray(raw.seenHints)
       ? raw.seenHints.filter((h): h is string => typeof h === 'string').slice(0, 50)
       : [],
+    // 没有这一项的是旧版本存档：老玩家不再自动弹出新手指引。
+    guideSeen: Array.isArray(raw.guideSeen)
+      ? GUIDE_PARTS.filter((part) => (raw.guideSeen as unknown[]).includes(part))
+      : [...GUIDE_PARTS],
   };
 }
 

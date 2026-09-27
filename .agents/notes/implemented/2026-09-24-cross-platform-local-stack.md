@@ -42,6 +42,7 @@ Status: implemented
 - 页面的内容安全策略只允许加载本地资源；冒烟测试核对页面请求全部是 `app://`、`data:` 或 `blob:`。
 - Electron 内置拼写检查会在 Windows / Linux 上联网下载词典：本地代理日志显示每次启动都尝试连接 `redirector.gvt1.com`。启动时清空拼写检查语言并关闭拼写检查后，全部端到端测试期间代理日志没有任何对外连接；冒烟测试核对这项设置。
 - 启动脚本在 macOS 与 Windows 的全新检出上完成安装、下载与构建，源码版冒烟测试通过（GitHub Actions）。
+- 2026-09-25 08:20 UTC：PR #1 合并到 main 后，CI 在公开仓库 XZL-CODE/echo-arena 发布 Release `v0.1.0`（macOS 通用 dmg、Windows 安装版与免安装版、SHA256SUMS.txt）。
 - 未验证：真实 Mac / Windows 电脑上的安装与首次打开（Gatekeeper、SmartScreen 提示）、Intel Mac 上的运行。
 
 ## Related materials
