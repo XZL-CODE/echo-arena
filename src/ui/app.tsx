@@ -20,6 +20,8 @@ import { Renderer } from '../render/renderer.js';
 import { View } from '../render/view.js';
 import { h, mount } from './dom.js';
 import { DIFFICULTY_LABEL, GameScreen, type GameHost } from './game.js';
+import { Guide } from './guide.js';
+import { guideOverview } from './guide-steps.js';
 import { button, dialog, segmented, slider, toggle } from './widgets.js';
 
 const DEMOS: Array<{ encounter: string; modules: Array<[ModuleId, ModuleLevel]> }> = [
@@ -56,6 +58,7 @@ export class App {
   readonly view: View;
   readonly renderer: Renderer;
   readonly arena: ArenaController;
+  readonly guide: Guide;
   private readonly root: HTMLElement;
   private readonly topbar: HTMLElement;
   private readonly stage: HTMLElement;
@@ -99,6 +102,7 @@ export class App {
     this.side = h('aside', { class: 'side' }) as HTMLElement;
     this.modalLayer = h('div', { class: 'modal-layer' }) as HTMLElement;
     this.toastLayer = h('div', { class: 'toast-layer', 'aria-live': 'polite' }) as HTMLElement;
+    const guideLayer = h('div', { class: 'guide-layer' }) as HTMLElement;
     mount(
       root,
       h(
@@ -107,9 +111,11 @@ export class App {
         this.topbar,
         h('main', { class: 'main' }, this.stage, this.side),
       ),
+      guideLayer,
       this.modalLayer,
       this.toastLayer,
     );
+    this.guide = new Guide(guideLayer, this.canvas);
     this.view = new View(this.canvas);
     this.renderer = new Renderer(this.view);
     this.arena = new ArenaController(this.renderer);
@@ -241,6 +247,11 @@ export class App {
     }
     if (e.key === 'm' || e.key === 'M') {
       this.toggleMute();
+      return;
+    }
+    // 指引打开时由它接管按键，避免在遮罩后面误触发开战、放招式等。
+    if (this.guide.open) {
+      if (this.guide.onKey(e)) e.preventDefault();
       return;
     }
     if (this.screen === 'title') {
@@ -641,6 +652,13 @@ export class App {
             'div',
             { class: 'title-row' },
             button({
+              label: '新手指引',
+              kind: 'ghost',
+              icon: 'help',
+              onClick: () => this.showGuideOverview(),
+              testId: 'title-guide',
+            }),
+            button({
               label: '设置',
               kind: 'ghost',
               icon: 'gear',
@@ -655,6 +673,12 @@ export class App {
         ),
       ),
     );
+  }
+
+  /** 标题页的“新手指引”：没有真实界面可指，按顺序翻看全部步骤。 */
+  private showGuideOverview(): void {
+    this.audio.ui('click');
+    this.guide.show({ label: '全部', steps: guideOverview(), skipLabel: '关闭' });
   }
 
   private async confirmNewRun(): Promise<void> {
@@ -699,6 +723,7 @@ export class App {
       overlay: this.overlay,
       stageTop: this.stageTop,
       stageBottom: this.stageBottom,
+      guide: this.guide,
       toast: (text) => this.toast(text),
       confirm: (title, body, ok) => this.confirm(title, body, ok),
       openSettings: () => this.openSettings(),

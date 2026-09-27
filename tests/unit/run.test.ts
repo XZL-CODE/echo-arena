@@ -145,6 +145,24 @@ test('存档往返后内容一致；损坏或陌生的存档返回 null', () => 
   assert.equal(parseSave(JSON.stringify({ app: 'other' })), null);
 });
 
+test('新手指引进度：新存档为空，往返保留；旧版本存档视为看过；非法值被过滤', () => {
+  const fresh = emptySave();
+  assert.deepEqual(fresh.settings.guideSeen, []);
+  fresh.settings.guideSeen = ['prep'];
+  assert.deepEqual(parseSave(serializeSave(fresh))?.settings.guideSeen, ['prep']);
+
+  // 版本 1 的存档没有 guideSeen：老玩家更新后不再自动弹出指引。
+  const legacy = { app: 'echo-arena', version: 1, settings: { musicVolume: 0.3, seenHints: [] } };
+  assert.deepEqual(parseSave(JSON.stringify(legacy))?.settings.guideSeen, [
+    'prep',
+    'battle',
+    'result',
+  ]);
+
+  const junk = { app: 'echo-arena', version: 2, settings: { guideSeen: ['battle', 'boss', 3] } };
+  assert.deepEqual(parseSave(JSON.stringify(junk))?.settings.guideSeen, ['battle']);
+});
+
 test('存档中的非法配置会被清理', () => {
   const data = emptySave();
   data.run = createRun(9, 'normal');

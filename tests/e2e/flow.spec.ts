@@ -3,7 +3,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { launchClient, readSave, ready, screenshotPath, type SaveFile } from './client';
+import { launchClient, readSave, ready, screenshotPath, skipGuide, type SaveFile } from './client';
 
 interface Hooks {
   fastForward(seconds: number): void;
@@ -24,6 +24,7 @@ async function setupRun(
     [encounterId, modules, matchIndex] as const,
   );
   await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  await skipGuide(page);
 }
 
 async function currentRun(page: Page): Promise<NonNullable<SaveFile['run']>> {
@@ -171,6 +172,7 @@ test('清除全部存档后回到第一次打开的状态，并留一份备份',
   const firstErrors = await ready(first.page);
   await first.page.click('[data-testid=start]');
   await expect(first.page.locator('[data-testid=fight]')).toBeVisible();
+  await skipGuide(first.page);
   await expect.poll(() => readSave(first.userData)?.run?.matchIndex).toBe(0);
 
   await first.page.getByRole('button', { name: '设置' }).click();
@@ -196,6 +198,7 @@ test('战前换起手招式；战斗中空格暂停、失焦自动暂停，按 1
   const errors = await ready(page);
   await page.click('[data-testid=start]');
   await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  await skipGuide(page);
   await page.click('[data-testid=starter-charge]');
   await expect.poll(async () => (await currentRun(page)).levels).toEqual({ charge: 1 });
   await fight(page);

@@ -1590,6 +1590,116 @@ body {
   }
 }
 
+/* ---- 新手指引 ---- */
+
+.guide-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+}
+
+.guide-layer[hidden],
+.guide-ring[hidden] {
+  display: none;
+}
+
+.guide-block {
+  position: fixed;
+  background: rgba(14, 9, 7, 0.62);
+  pointer-events: auto;
+}
+
+.guide-ring {
+  position: fixed;
+  border: 3px solid var(--yellow);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 4px rgba(255, 209, 102, 0.22),
+    0 0 26px rgba(255, 209, 102, 0.45);
+  pointer-events: none;
+  animation: guide-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes guide-pulse {
+  50% {
+    box-shadow:
+      0 0 0 7px rgba(255, 209, 102, 0.12),
+      0 0 34px rgba(255, 209, 102, 0.6);
+  }
+}
+
+.guide-card {
+  position: fixed;
+  width: min(340px, calc(100vw - 24px));
+  padding: 14px 16px 12px;
+  border-radius: 16px;
+  background: #2c1f1a;
+  border: 1px solid rgba(255, 209, 102, 0.55);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.guide-card-in {
+  animation: pop-in 0.18s ease-out;
+}
+
+.guide-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--yellow);
+  letter-spacing: 1px;
+}
+
+.guide-card h3 {
+  margin: 4px 0 4px;
+  font-size: 18px;
+}
+
+.guide-card p {
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+
+.guide-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guide-skip {
+  margin-right: auto;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: 600 13px/1.2 var(--font);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.guide-skip:hover {
+  color: var(--text);
+}
+
+.guide-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-right: 4px;
+}
+
+.guide-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 236, 205, 0.25);
+}
+
+.guide-dots i.on {
+  background: var(--yellow);
+}
+
 /* ---- 适配小窗口 ---- */
 
 @media (max-width: 1150px) {

@@ -3,7 +3,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { launchClient, screenshotPath } from './client';
+import { launchClient, screenshotPath, skipGuide } from './client';
 
 test('客户端启动、开始一轮并写入本地存档', async () => {
   const { app, page, userData } = await launchClient();
@@ -19,6 +19,8 @@ test('客户端启动、开始一轮并写入本地存档', async () => {
 
   await page.click('[data-testid=start]');
   await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  // 新安装会弹出新手指引（详细流程见 guide.spec.ts），冒烟测试直接跳过。
+  await skipGuide(page);
   await page.screenshot({ path: screenshotPath('smoke-prep'), animations: 'disabled' });
   await page.click('[data-testid=fight]');
   await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
