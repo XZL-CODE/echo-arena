@@ -248,6 +248,8 @@ export class Guide {
     this.index = index;
     this.tapped = false;
     this.stepStart = performance.now();
+    // 手指的位置下一帧按这一步重新算；先清掉上一步留下的（测试照着它点）。
+    for (const key of ['x', 'y', 'toX', 'toY']) delete this.hand.dataset[key];
     step.enter?.();
     this.renderCard();
     this.placed = '';
