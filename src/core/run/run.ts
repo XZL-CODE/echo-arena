@@ -130,9 +130,28 @@ export function canChooseStarter(run: RunState): boolean {
 export function chooseStarter(run: RunState, id: ModuleId): RunState {
   if (!canChooseStarter(run) || !STARTING_CHOICES.includes(id)) return run;
   let loadout = run.loadout;
-  for (const other of STARTING_CHOICES) loadout = unequip(loadout, other);
+  // 只换开局招式；教学战额外带的招式保留。
+  const levels = { ...run.levels };
+  for (const other of STARTING_CHOICES) {
+    loadout = unequip(loadout, other);
+    delete levels[other];
+  }
   loadout = autoEquip(loadout, id) ?? loadout;
-  return { ...run, levels: { [id]: 1 }, loadout };
+  return { ...run, levels: { ...levels, [id]: 1 }, loadout };
+}
+
+/** 教学战用的种子：第一场木箭齐射队，开局几秒内就会有箭被反射盾弹回。 */
+export const PRACTICE_SEED = 20260927;
+
+/**
+ * 教学战：轻松难度的第一场，叮当额外带上主动招式漩涡，好把放招式也教到。
+ * 只存在于内存里，不写进存档。
+ */
+export function createPracticeRun(now = new Date()): RunState {
+  const run = createRun(PRACTICE_SEED, 'easy', now);
+  const levels: RunState['levels'] = { ...run.levels, vortex: 1 };
+  const loadout = autoEquip(run.loadout, 'vortex') ?? run.loadout;
+  return { ...run, levels, loadout, formation: ensureGadgets(run.formation, levels, loadout) };
 }
 
 export function setLoadout(run: RunState, loadout: Loadout): RunState {

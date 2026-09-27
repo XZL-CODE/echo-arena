@@ -84,6 +84,7 @@ const UI_GLYPHS = {
   speed: 'M8 12 L22 24 L8 36 Z M24 12 L38 24 L24 36 Z',
   folder: 'M6 14 H19 L23 18 H42 V38 H6 Z',
   help: 'M24 6 A18 18 0 1 1 23.9 6 M18.5 19 C18.5 12.5 29.5 12.5 29.5 19 C29.5 24 24 24.5 24 29.5 M24 35 V35.5',
+  check: 'M10 25 L20 35 L38 14',
 } as const;
 
 export type UiIcon = keyof typeof UI_GLYPHS;

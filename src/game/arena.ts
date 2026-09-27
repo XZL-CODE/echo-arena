@@ -137,12 +137,12 @@ export class ArenaController {
     if (ok) this.hooks.onChange?.();
   }
 
-  /** 测试用：立即推进若干秒（仍会产生画面与声音事件）。 */
+  /** 测试用：立即推进若干秒（仍会产生画面与声音事件）；中途被暂停（例如指引定格）就停下。 */
   fastForward(seconds: number): void {
     const world = this.world;
     if (!world || (this.mode !== 'battle' && this.mode !== 'ended')) return;
     const steps = Math.round(seconds / SIM.dt);
-    for (let i = 0; i < steps && !world.result; i++) {
+    for (let i = 0; i < steps && !world.result && !this.paused; i++) {
       world.step();
       this.flushEvents();
       this.renderer.fx.update(SIM.dt);
@@ -191,14 +191,15 @@ export class ArenaController {
   private advance(world: World, dt: number, scale: number): void {
     this.acc += dt * scale;
     let steps = 0;
-    while (this.acc >= SIM.dt && steps < 10) {
+    // 事件回调里可能暂停（新手指引定格讲解），暂停后这一帧剩下的步数也不再推进。
+    while (this.acc >= SIM.dt && steps < 10 && !this.paused) {
       if (this.mode === 'demo' && world.tick % 12 === 0) this.demoStep?.(world);
       world.step();
       this.acc -= SIM.dt;
       steps++;
       this.flushEvents();
     }
-    if (steps === 10) this.acc = 0;
+    if (steps === 10 || this.paused) this.acc = 0;
     this.renderer.fx.update(dt * Math.min(1.5, scale || 1));
   }
 

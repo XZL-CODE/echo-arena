@@ -16,10 +16,14 @@ import {
 } from './run.js';
 
 // 版本 2：设置里增加新手指引进度（guideSeen）。
-export const SAVE_VERSION = 2;
+// 版本 3：新手指引按课程记录，多了放招式、回响、挑奖励三课。
+export const SAVE_VERSION = 3;
 
-/** 新手指引分三段：战前准备、战斗、第一场结算。 */
-export const GUIDE_PARTS = ['prep', 'battle', 'result'] as const;
+/**
+ * 新手指引的各课：战前准备、开战、第一次放招式、第一次打出回响、第一场结算、第一次挑奖励。
+ * 每课在对应情形第一次出现时教一次。
+ */
+export const GUIDE_PARTS = ['prep', 'battle', 'skill', 'echo', 'result', 'reward'] as const;
 export type GuidePart = (typeof GUIDE_PARTS)[number];
 
 export interface Settings {
@@ -116,7 +120,7 @@ const DIFFICULTIES: Difficulty[] = ['easy', 'normal', 'hard'];
 const difficulty = (v: unknown, fallback: Difficulty): Difficulty =>
   DIFFICULTIES.includes(v as Difficulty) ? (v as Difficulty) : fallback;
 
-function parseSettings(raw: unknown): Settings {
+function parseSettings(raw: unknown, version: number): Settings {
   const d = defaultSettings();
   if (!isObject(raw)) return d;
   return {
@@ -132,11 +136,23 @@ function parseSettings(raw: unknown): Settings {
     seenHints: Array.isArray(raw.seenHints)
       ? raw.seenHints.filter((h): h is string => typeof h === 'string').slice(0, 50)
       : [],
-    // 没有这一项的是旧版本存档：老玩家不再自动弹出新手指引。
-    guideSeen: Array.isArray(raw.guideSeen)
-      ? GUIDE_PARTS.filter((part) => (raw.guideSeen as unknown[]).includes(part))
-      : [...GUIDE_PARTS],
+    guideSeen: parseGuideSeen(raw.guideSeen, version),
   };
+}
+
+function parseGuideSeen(raw: unknown, version: number): GuidePart[] {
+  // 没有这一项的是 v0.1.0 的存档：老玩家不再自动弹出新手指引。
+  if (!Array.isArray(raw)) return [...GUIDE_PARTS];
+  const seen = new Set(GUIDE_PARTS.filter((part) => raw.includes(part)));
+  // 版本 2 只分三段：看过战斗那段的算学过放招式和回响，看过结算的算学过挑奖励。
+  if (version <= 2) {
+    if (seen.has('battle')) {
+      seen.add('skill');
+      seen.add('echo');
+    }
+    if (seen.has('result')) seen.add('reward');
+  }
+  return GUIDE_PARTS.filter((part) => seen.has(part));
 }
 
 function parseRecords(raw: unknown): Records {
@@ -260,7 +276,7 @@ export function parseSave(text: string | null): SaveData | null {
     app: 'echo-arena',
     version: SAVE_VERSION,
     savedAt: typeof raw.savedAt === 'string' ? raw.savedAt : new Date(0).toISOString(),
-    settings: parseSettings(raw.settings),
+    settings: parseSettings(raw.settings, num(raw.version, 1)),
     run: parseRun(raw.run),
     records: parseRecords(raw.records),
   };
