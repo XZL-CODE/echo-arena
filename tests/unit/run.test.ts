@@ -14,13 +14,15 @@ import {
   beginBattle,
   canChooseStarter,
   chooseStarter,
+  createPracticeRun,
   createRun,
+  currentEncounter,
   finishBattle,
   pickReward,
   setLoadout,
 } from '../../src/core/run/run.js';
 import { summarizeBattle, summarizeRun } from '../../src/core/run/insights.js';
-import { emptySave, parseSave, serializeSave } from '../../src/core/run/save.js';
+import { emptySave, GUIDE_PARTS, parseSave, serializeSave } from '../../src/core/run/save.js';
 import { createStats } from '../../src/core/sim/stats.js';
 import { World } from '../../src/core/sim/world.js';
 import { autoplay } from './tools/harness.js';
@@ -48,6 +50,19 @@ test('开局招式可以在第一场开战前改选，开战后不能再改', ()
   run = beginBattle(run);
   assert.equal(canChooseStarter(run), false);
   assert.equal(chooseStarter(run, 'bulwark'), run);
+});
+
+test('教学战：第一场木箭齐射队、轻松难度，叮当带着漩涡；换开局招式时漩涡保留', () => {
+  let run = createPracticeRun();
+  assert.equal(currentEncounter(run).id, 'volley');
+  assert.equal(run.difficulty, 'easy');
+  assert.deepEqual(findEquipped(run.loadout, 'vortex'), { unit: 'bell', slot: 0 });
+  assert.ok(findEquipped(run.loadout, 'reflect'));
+  run = chooseStarter(run, 'charge');
+  assert.deepEqual(Object.keys(run.levels).sort(), ['charge', 'vortex']);
+  assert.ok(findEquipped(run.loadout, 'charge'));
+  assert.equal(findEquipped(run.loadout, 'reflect'), null);
+  assert.deepEqual(findEquipped(run.loadout, 'vortex'), { unit: 'bell', slot: 0 });
 });
 
 test('装配规则：专属招式、每人一个主动、同一招式只占一个槽', () => {
@@ -145,21 +160,26 @@ test('存档往返后内容一致；损坏或陌生的存档返回 null', () => 
   assert.equal(parseSave(JSON.stringify({ app: 'other' })), null);
 });
 
-test('新手指引进度：新存档为空，往返保留；旧版本存档视为看过；非法值被过滤', () => {
+test('新手指引进度：新存档为空，往返保留；旧版本存档按学过的课换算；非法值被过滤', () => {
   const fresh = emptySave();
   assert.deepEqual(fresh.settings.guideSeen, []);
-  fresh.settings.guideSeen = ['prep'];
-  assert.deepEqual(parseSave(serializeSave(fresh))?.settings.guideSeen, ['prep']);
+  fresh.settings.guideSeen = ['prep', 'echo'];
+  assert.deepEqual(parseSave(serializeSave(fresh))?.settings.guideSeen, ['prep', 'echo']);
 
-  // 版本 1 的存档没有 guideSeen：老玩家更新后不再自动弹出指引。
+  // 版本 1（v0.1.0）的存档没有 guideSeen：老玩家更新后不再自动弹出指引。
   const legacy = { app: 'echo-arena', version: 1, settings: { musicVolume: 0.3, seenHints: [] } };
-  assert.deepEqual(parseSave(JSON.stringify(legacy))?.settings.guideSeen, [
-    'prep',
-    'battle',
-    'result',
-  ]);
+  assert.deepEqual(parseSave(JSON.stringify(legacy))?.settings.guideSeen, [...GUIDE_PARTS]);
 
-  const junk = { app: 'echo-arena', version: 2, settings: { guideSeen: ['battle', 'boss', 3] } };
+  // 版本 2（v0.2.0）只分三段：看过战斗算学过放招式和回响，看过结算算学过挑奖励。
+  const v2 = (guideSeen: unknown) =>
+    parseSave(JSON.stringify({ app: 'echo-arena', version: 2, settings: { guideSeen } }))?.settings
+      .guideSeen;
+  assert.deepEqual(v2(['prep', 'battle', 'result']), [...GUIDE_PARTS]);
+  assert.deepEqual(v2(['prep']), ['prep']);
+  assert.deepEqual(v2([]), []);
+  assert.deepEqual(v2(['battle', 'boss', 3]), ['battle', 'skill', 'echo']);
+
+  const junk = { app: 'echo-arena', version: 3, settings: { guideSeen: ['battle', 'boss', 3] } };
   assert.deepEqual(parseSave(JSON.stringify(junk))?.settings.guideSeen, ['battle']);
 });
 

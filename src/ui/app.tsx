@@ -21,7 +21,6 @@ import { View } from '../render/view.js';
 import { h, mount } from './dom.js';
 import { DIFFICULTY_LABEL, GameScreen, type GameHost } from './game.js';
 import { Guide } from './guide.js';
-import { guideOverview } from './guide-steps.js';
 import { button, dialog, segmented, slider, toggle } from './widgets.js';
 
 const DEMOS: Array<{ encounter: string; modules: Array<[ModuleId, ModuleLevel]> }> = [
@@ -249,9 +248,9 @@ export class App {
       this.toggleMute();
       return;
     }
-    // 指引打开时由它接管按键，避免在遮罩后面误触发开战、放招式等。
-    if (this.guide.open) {
-      if (this.guide.onKey(e)) e.preventDefault();
+    // 指引打开时先由它处理按键：只放行这一步提示的按键，避免在遮罩后面误触发别的操作。
+    if (this.guide.open && this.guide.onKey(e)) {
+      e.preventDefault();
       return;
     }
     if (this.screen === 'title') {
@@ -655,7 +654,8 @@ export class App {
               label: '新手指引',
               kind: 'ghost',
               icon: 'help',
-              onClick: () => this.showGuideOverview(),
+              title: '进一场教学战，跟着手指从头练一遍（不影响存档）',
+              onClick: () => this.startPractice(),
               testId: 'title-guide',
             }),
             button({
@@ -675,10 +675,10 @@ export class App {
     );
   }
 
-  /** 标题页的“新手指引”：没有真实界面可指，按顺序翻看全部步骤。 */
-  private showGuideOverview(): void {
-    this.audio.ui('click');
-    this.guide.show({ label: '全部', steps: guideOverview(), skipLabel: '关闭' });
+  /** 标题页的“新手指引”：进一场教学战，在真实界面上从头教一遍，不影响存档。 */
+  private startPractice(): void {
+    this.audio.ui('start');
+    this.enterGame(true);
   }
 
   private async confirmNewRun(): Promise<void> {
@@ -705,8 +705,8 @@ export class App {
     this.enterGame();
   }
 
-  private enterGame(): void {
-    if (!this.persistence.data.run) {
+  private enterGame(practice = false): void {
+    if (!practice && !this.persistence.data.run) {
       this.newRun();
       return;
     }
@@ -737,7 +737,12 @@ export class App {
         this.game?.destroy();
         this.newRun();
       },
+      resumeRun: () => {
+        this.game?.destroy();
+        this.enterGame();
+      },
       toggleMute: () => this.toggleMute(),
+      practice,
     };
     this.game = new GameScreen(host);
     requestAnimationFrame(() => this.fit());

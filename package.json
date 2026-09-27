@@ -1,7 +1,7 @@
 {
   "name": "echo-arena",
   "productName": "回声竞技场",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "回声竞技场：可在 macOS 与 Windows 上离线游玩的单人短局战术小游戏（桌面客户端）",
   "author": "Echo Arena",

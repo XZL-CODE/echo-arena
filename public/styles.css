@@ -1599,49 +1599,128 @@ body {
   pointer-events: none;
 }
 
-.guide-layer[hidden],
-.guide-ring[hidden] {
+.guide-layer[hidden] {
   display: none;
 }
 
-.guide-block {
+.guide-svg {
   position: fixed;
-  background: rgba(14, 9, 7, 0.62);
-  pointer-events: auto;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.guide-dim {
+  fill: rgba(12, 8, 6, 0.72);
 }
 
 .guide-ring {
-  position: fixed;
-  border: 3px solid var(--yellow);
-  border-radius: 14px;
-  box-shadow:
-    0 0 0 4px rgba(255, 209, 102, 0.22),
-    0 0 26px rgba(255, 209, 102, 0.45);
-  pointer-events: none;
-  animation: guide-pulse 1.8s ease-in-out infinite;
+  fill: none;
+  stroke: var(--yellow);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 10px rgba(255, 209, 102, 0.55));
+  animation: guide-ring 1.6s ease-in-out infinite;
 }
 
-@keyframes guide-pulse {
+@keyframes guide-ring {
   50% {
-    box-shadow:
-      0 0 0 7px rgba(255, 209, 102, 0.12),
-      0 0 34px rgba(255, 209, 102, 0.6);
+    stroke-width: 5;
+    stroke-opacity: 0.75;
   }
+}
+
+.guide-trail {
+  fill: none;
+  stroke: var(--yellow);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 10 9;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
+  animation: guide-march 0.8s linear infinite;
+}
+
+@keyframes guide-march {
+  to {
+    stroke-dashoffset: -19;
+  }
+}
+
+.guide-goal {
+  fill: rgba(255, 209, 102, 0.12);
+  stroke: var(--yellow);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 5;
+}
+
+.guide-ripple {
+  fill: none;
+  stroke: #fff6dc;
+  stroke-width: 3;
+}
+
+.guide-comet {
+  fill: #fff6dc;
+  stroke: var(--yellow);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 8px rgba(255, 209, 102, 0.9));
+}
+
+.hand-skin {
+  fill: #fffaf0;
+  stroke: #3a2519;
+  stroke-width: 2.6;
+  stroke-linejoin: round;
+}
+
+.hand-shadow {
+  fill: rgba(0, 0, 0, 0.38);
+}
+
+.hand-cuff {
+  fill: var(--yellow);
+  stroke: #3a2519;
+  stroke-width: 2.6;
+}
+
+.hand-crease {
+  fill: none;
+  stroke: #3a2519;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 
 .guide-card {
   position: fixed;
-  width: min(340px, calc(100vw - 24px));
-  padding: 14px 16px 12px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: min(380px, calc(100vw - 24px));
+  padding: 14px 16px 12px 14px;
   border-radius: 16px;
   background: #2c1f1a;
-  border: 1px solid rgba(255, 209, 102, 0.55);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+  border: 2px solid rgba(255, 209, 102, 0.7);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
   pointer-events: auto;
+  --tail: 50%;
 }
 
 .guide-card-in {
   animation: pop-in 0.18s ease-out;
+}
+
+.guide-avatar {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, #5a4036, #3a2922);
+  border: 2px solid rgba(255, 209, 102, 0.6);
+}
+
+.guide-body {
+  min-width: 0;
+  flex: 1;
 }
 
 .guide-kicker {
@@ -1652,13 +1731,43 @@ body {
 }
 
 .guide-card h3 {
-  margin: 4px 0 4px;
-  font-size: 18px;
+  margin: 3px 0 4px;
+  font-size: 19px;
+  line-height: 1.35;
 }
 
 .guide-card p {
-  margin: 0 0 12px;
+  margin: 0 0 10px;
   line-height: 1.6;
+  color: var(--cream);
+}
+
+.guide-keys {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.guide-keys .kbd {
+  padding: 5px 9px;
+  font-size: 12px;
+  background: #4a3830;
+  border: 1px solid rgba(255, 236, 205, 0.3);
+  box-shadow: 0 3px 0 #1c130f;
+  opacity: 1;
+  animation: guide-key 1.8s ease-in-out infinite;
+}
+
+@keyframes guide-key {
+  25%,
+  35% {
+    transform: translateY(2px);
+    box-shadow: 0 1px 0 #1c130f;
+    background: #6a5040;
+  }
 }
 
 .guide-foot {
@@ -1683,6 +1792,12 @@ body {
   color: var(--text);
 }
 
+.guide-wait {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--yellow);
+}
+
 .guide-dots {
   display: inline-flex;
   gap: 4px;
@@ -1690,14 +1805,111 @@ body {
 }
 
 .guide-dots i {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: rgba(255, 236, 205, 0.25);
+  background: rgba(255, 236, 205, 0.22);
+}
+
+.guide-dots i.past {
+  background: rgba(255, 209, 102, 0.5);
 }
 
 .guide-dots i.on {
   background: var(--yellow);
+}
+
+/* 卡片上的小三角：指向被亮出来的主目标。 */
+.guide-tail {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #2c1f1a;
+  border: 2px solid rgba(255, 209, 102, 0.7);
+  transform: rotate(45deg);
+}
+
+.guide-card[data-side='none'] .guide-tail {
+  display: none;
+}
+
+.guide-card[data-side='top'] .guide-tail {
+  top: -9px;
+  left: calc(var(--tail) - 8px);
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.guide-card[data-side='bottom'] .guide-tail {
+  bottom: -9px;
+  left: calc(var(--tail) - 8px);
+  border-left: 0;
+  border-top: 0;
+}
+
+.guide-card[data-side='left'] .guide-tail {
+  left: -9px;
+  top: calc(var(--tail) - 8px);
+  border-right: 0;
+  border-top: 0;
+}
+
+.guide-card[data-side='right'] .guide-tail {
+  right: -9px;
+  top: calc(var(--tail) - 8px);
+  border-left: 0;
+  border-bottom: 0;
+}
+
+/* 窗口矮时说明卡片收紧一些，给亮出来的地方让位。 */
+@media (max-height: 700px) {
+  .guide-card {
+    gap: 10px;
+    padding: 10px 12px 9px 10px;
+  }
+
+  .guide-avatar {
+    width: 40px;
+    height: 40px;
+  }
+
+  .guide-card h3 {
+    margin: 1px 0 2px;
+    font-size: 17px;
+  }
+
+  .guide-card p {
+    margin-bottom: 7px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .guide-keys {
+    margin: 0 0 7px;
+  }
+
+  .guide-keys .kbd {
+    padding: 3px 7px;
+  }
+}
+
+/* 教学战打完的总结卡片。 */
+.practice-list {
+  margin: 4px 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.practice-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+
+.practice-list .ui-icon {
+  flex: none;
+  color: var(--mint);
 }
 
 /* ---- 适配小窗口 ---- */

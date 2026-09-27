@@ -8,6 +8,8 @@ type Props = Record<string, unknown> | null;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const SVG_TAGS = new Set([
   'svg',
+  'defs',
+  'mask',
   'path',
   'circle',
   'rect',

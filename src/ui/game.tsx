@@ -22,6 +22,7 @@ import {
   beginBattle,
   canChooseStarter,
   chooseStarter,
+  createPracticeRun,
   currentEncounter,
   defaultFormation,
   finishBattle,
@@ -48,8 +49,22 @@ import type { Persistence } from '../game/persistence.js';
 import { portrait } from '../render/portrait.js';
 import type { Looks } from '../render/renderer.js';
 import { cx, h, mount, type Child } from './dom.js';
-import type { ArenaRect, Guide } from './guide.js';
-import { GUIDE_LABEL, guideOverview, guideSteps, type GuideTopic } from './guide-steps.js';
+import type { Guide, GuideStep } from './guide.js';
+import {
+  battleLesson,
+  battleReview,
+  echoLesson,
+  GUIDE_LABEL,
+  practiceDoneReview,
+  prepLesson,
+  resultLesson,
+  rewardLesson,
+  skillLesson,
+  summaryReview,
+  UNIT_KEYS,
+  type EchoMoment,
+  type LessonContext,
+} from './guide-steps.js';
 import { FAMILY_COLORS, moduleIcon, uiIcon } from './icons.js';
 import { button, iconButton, kbd } from './widgets.js';
 
@@ -77,21 +92,23 @@ export interface GameHost {
   closeModal(): void;
   goTitle(): void;
   newRun(): void;
+  /** 回到存档里正在进行的这一轮。 */
+  resumeRun(): void;
   toggleMute(): void;
+  /** 教学战：一场只在内存里的练习，不读写存档里的这一轮。 */
+  practice?: boolean;
 }
 
 type Selection =
   { kind: 'slot'; unit: PlayerUnitKind; slot: number } | { kind: 'module'; id: ModuleId } | null;
 
-type View = 'prep' | 'battle' | 'result' | 'reward' | 'summary';
+type View = 'prep' | 'battle' | 'result' | 'reward' | 'summary' | 'practice-done';
 
 export const DIFFICULTY_LABEL: Record<Difficulty, string> = {
   easy: '轻松',
   normal: '标准',
   hard: '硬核',
 };
-
-const UNIT_KEYS: Record<PlayerUnitKind, string> = { guard: '1', slinger: '2', bell: '3' };
 
 interface UnitHud {
   card: HTMLElement;
@@ -134,16 +151,26 @@ export class GameScreen {
   };
   private banner: HTMLElement | null = null;
   private highlight: EnemyUnitKind | null = null;
-  /** 正在显示的指引段落，以及它是不是新安装后自动出现的。 */
-  private guideTopic: GuideTopic | 'overview' | null = null;
-  private guideAuto = false;
+  /** 教学战的这一轮（不写进存档）；正式游戏时为 null。 */
+  private practiceRun: RunState | null;
+  /** 正在上的指引课：第一次教还是重看，以及教完算学过哪几课。 */
+  private lesson: { mode: 'teach' | 'review'; parts: readonly GuidePart[] } | null = null;
+  /** 教学战里已经教过的课（教学战不看存档里的进度，每课都教一遍）。 */
+  private practiceTaught = new Set<GuidePart>();
+  /** 上一课结束时的战斗时间：两课之间留一点空当。 */
+  private lessonEndT = -Infinity;
+  /** 这一场放出的主动招式次数、战前拖动队员的次数（指引判断是否照做了）。 */
+  private casts = 0;
+  private formationMoves = 0;
 
   constructor(host: GameHost) {
     this.host = host;
+    this.practiceRun = host.practice ? createPracticeRun() : null;
     const arena = host.arena;
     arena.hooks = {
       onEvents: (events, world) => this.onEvents(events, world),
       onFormation: (formation) => {
+        this.formationMoves++;
         this.setRun(setFormation(this.run, formation));
       },
       onSelect: (kind) => {
@@ -159,6 +186,7 @@ export class GameScreen {
   }
 
   get run(): RunState {
+    if (this.practiceRun) return this.practiceRun;
     const run = this.host.persistence.data.run;
     if (!run) throw new Error('No active run');
     return run;
@@ -169,6 +197,10 @@ export class GameScreen {
   }
 
   private setRun(run: RunState, immediate = false): void {
+    if (this.practiceRun) {
+      this.practiceRun = run;
+      return;
+    }
     this.host.persistence.update((d) => {
       d.run = run;
     }, immediate);
@@ -224,7 +256,7 @@ export class GameScreen {
     this.renderTopbar();
     this.renderPrepHeader();
     this.renderPrepSide();
-    this.autoGuide('prep');
+    this.teach('prep', (ctx) => prepLesson(ctx));
   }
 
   private rebuildPreview(): void {
@@ -242,6 +274,8 @@ export class GameScreen {
     this.view = 'battle';
     this.selection = null;
     this.pauseReason = null;
+    this.casts = 0;
+    this.lessonEndT = -Infinity;
     this.host.arena.looks = this.looks();
     this.host.arena.reduceFlashes = this.settings.reduceFlashes;
     this.host.arena.startBattle(battleConfig(run));
@@ -255,17 +289,20 @@ export class GameScreen {
     this.banner = null;
     this.renderTopbar();
     this.renderBattleHud();
-    this.autoGuide('battle');
+    this.teach('battle', (ctx) => battleLesson(ctx));
   }
 
   private onBattleEnd(world: World): void {
     this.dismissGuide();
     const stats = world.stats;
     let run = finishBattle(this.run, stats);
-    this.host.persistence.update((d) => {
-      d.run = run;
-      d.records.bestEcho = Math.max(d.records.bestEcho, stats.maxEcho);
-    }, true);
+    if (this.practiceRun) this.practiceRun = run;
+    else {
+      this.host.persistence.update((d) => {
+        d.run = run;
+        d.records.bestEcho = Math.max(d.records.bestEcho, stats.maxEcho);
+      }, true);
+    }
     run = this.run;
     const survivors = world.units.filter((u) => u.alive && u.team === 1).map((u) => u.kind);
     const actives = PLAYER_UNITS.map((k) => world.playerUnit(k)?.active).filter(
@@ -280,7 +317,8 @@ export class GameScreen {
     this.host.audio.setDucked(true);
     this.renderTopbar();
     this.renderResult();
-    this.autoGuide('result');
+    const win = this.summary.result === 'win';
+    this.teach('result', (ctx) => resultLesson(ctx, win));
   }
 
   private retrySame(): void {
@@ -334,9 +372,17 @@ export class GameScreen {
       h(
         'div',
         { class: 'match-title' },
-        h('span', { class: 'match-no' }, `第 ${run.matchIndex + 1} / ${RUN_LENGTH} 场`),
+        h(
+          'span',
+          { class: 'match-no' },
+          this.practiceRun ? '教学战' : `第 ${run.matchIndex + 1} / ${RUN_LENGTH} 场`,
+        ),
         h('span', { class: 'match-name', 'data-testid': 'match-name' }, enc.name),
-        h('span', { class: 'chip' }, DIFFICULTY_LABEL[run.difficulty]),
+        h(
+          'span',
+          { class: 'chip' },
+          this.practiceRun ? '不影响存档' : DIFFICULTY_LABEL[run.difficulty],
+        ),
       ),
       h('div', { class: 'topbar-right' }, ...right),
     );
@@ -401,7 +447,11 @@ export class GameScreen {
         h(
           'div',
           { class: 'mh-text' },
-          h('div', { class: 'card-kicker' }, `第 ${run.matchIndex + 1} 场 · 本场对手`),
+          h(
+            'div',
+            { class: 'card-kicker' },
+            this.practiceRun ? '教学战 · 本场对手' : `第 ${run.matchIndex + 1} 场 · 本场对手`,
+          ),
           h('h2', null, enc.name),
           h('p', { class: 'intro' }, enc.intro),
           h(
@@ -916,6 +966,7 @@ export class GameScreen {
     const arena = this.host.arena;
     const world = arena.world;
     if (!world) return;
+    this.checkSkillLesson();
     if (this.hud.timer) {
       const t = formatTime(world.t);
       if (this.hud.timer.textContent !== t) this.hud.timer.textContent = t;
@@ -1036,6 +1087,8 @@ export class GameScreen {
     for (const e of events) {
       if (e.type === 'overtime' && e.level === 1) this.host.toast('进入加时：双方伤害逐步提高');
       if (e.type === 'focus') this.updateHud(true);
+      if (e.type === 'cast') this.casts++;
+      if (e.type === 'echo' && e.level >= 1 && e.source !== 'enemy') this.checkEchoLesson(e);
     }
     void world;
   }
@@ -1139,6 +1192,7 @@ export class GameScreen {
     mount(this.host.stageBottom);
     this.host.side.dataset.mode = 'hidden';
     this.renderReward();
+    this.teach('reward', (ctx) => rewardLesson(ctx));
   }
 
   private renderReward(): void {
@@ -1217,8 +1271,13 @@ export class GameScreen {
     const before = this.run;
     const run = pickReward(before, id);
     if (run === before) return;
-    this.setRun(run, true);
     this.host.audio.ui('reward');
+    // 教学战到这里就结束了，不进入下一场。
+    if (this.practiceRun) {
+      this.showPracticeDone();
+      return;
+    }
+    this.setRun(run, true);
     const def = MODULE_DEFS[id];
     const at = findEquipped(run.loadout, id);
     if (before.levels[id]) this.host.toast(`「${def.name}」已进阶：${def.levels[1].title}`);
@@ -1334,64 +1393,129 @@ export class GameScreen {
 
   // ---- 新手指引 ----
 
-  /** 新安装后，这一段还没看过时自动出现。 */
-  private autoGuide(part: GuidePart): void {
-    if (this.settings.guideSeen.includes(part)) return;
-    this.showGuide(part, true);
+  /** 这一课还没教过吗。教学战里每课都教一遍，不看存档里的进度。 */
+  private canTeach(part: GuidePart): boolean {
+    if (this.practiceRun) return !this.practiceTaught.has(part);
+    return !this.settings.guideSeen.includes(part);
   }
 
-  /** 顶栏的“？”：重看当前界面对应的一段。 */
+  /** 对应情形第一次出现时上这一课。 */
+  private teach(part: GuidePart, build: (ctx: LessonContext) => GuideStep[]): void {
+    if (!this.canTeach(part) || this.host.guide.open) return;
+    this.openLesson(GUIDE_LABEL[part], build(this.lessonContext('teach')), 'teach', [part]);
+  }
+
+  /** 第一次能放主动招式时教放招式；已经自己放过的就不教了。 */
+  private checkSkillLesson(): void {
+    const arena = this.host.arena;
+    const world = arena.world;
+    if (!world || arena.mode !== 'battle' || arena.paused || this.host.guide.open) return;
+    if (!this.canTeach('skill')) return;
+    if (this.casts > 0) {
+      this.learned(['skill']);
+      return;
+    }
+    if (world.t < Math.max(2, this.lessonEndT + 1.5)) return;
+    const kind = PLAYER_UNITS.find((k) => arena.canCast(k));
+    if (kind) this.teach('skill', (ctx) => skillLesson(ctx, kind));
+  }
+
+  /** 第一次打出回响：定格在那一刻讲，并画出弹丸接下来飞向谁。 */
+  private checkEchoLesson(moment: EchoMoment): void {
+    const arena = this.host.arena;
+    const world = arena.world;
+    if (this.view !== 'battle' || arena.mode !== 'battle' || arena.paused || !world) return;
+    if (!this.canTeach('echo') || this.host.guide.open) return;
+    const shot = world.projectiles
+      .filter((p) => p.alive && p.team === 0 && p.echo === moment.level && p.seekId)
+      .sort(
+        (a, b) =>
+          Math.hypot(a.x - moment.x, a.y - moment.y) - Math.hypot(b.x - moment.x, b.y - moment.y),
+      )[0];
+    const target = shot ? world.unitById(shot.seekId) : undefined;
+    const to = target?.alive ? { x: target.x, y: target.y - target.radius * 0.4 } : null;
+    this.teach('echo', () => echoLesson({ ...moment, to }));
+  }
+
+  /** 顶栏的“？”：重看当前界面对应的课。 */
   private openGuide(): void {
-    const topics: Record<View, GuideTopic | 'overview'> = {
-      prep: 'prep',
-      battle: 'battle',
-      result: 'result',
-      reward: 'reward',
-      summary: 'overview',
-    };
     this.host.audio.ui('click');
-    this.showGuide(topics[this.view], false);
+    const ctx = this.lessonContext('review');
+    switch (this.view) {
+      case 'prep':
+        this.openLesson(GUIDE_LABEL.prep, prepLesson(ctx), 'review');
+        break;
+      case 'battle':
+        this.openLesson('战斗', battleReview(ctx), 'review');
+        break;
+      case 'result':
+        this.openLesson(
+          GUIDE_LABEL.result,
+          resultLesson(ctx, this.summary?.result === 'win'),
+          'review',
+        );
+        break;
+      case 'reward':
+        this.openLesson(GUIDE_LABEL.reward, rewardLesson(ctx), 'review');
+        break;
+      case 'practice-done':
+        this.openLesson('教学战', practiceDoneReview(), 'review');
+        break;
+      case 'summary':
+        this.openLesson('整轮结算', summaryReview(), 'review');
+    }
   }
 
-  private showGuide(topic: GuideTopic | 'overview', auto: boolean): void {
+  private openLesson(
+    label: string,
+    steps: GuideStep[],
+    mode: 'teach' | 'review',
+    parts: readonly GuidePart[] = [],
+  ): void {
     const guide = this.host.guide;
-    const isPart = (t: string): t is GuidePart => (GUIDE_PARTS as readonly string[]).includes(t);
     guide.show({
-      label: topic === 'overview' ? '全部' : GUIDE_LABEL[topic],
-      steps:
-        topic === 'overview'
-          ? guideOverview()
-          : guideSteps(topic, { enemyArea: () => this.enemyArea() }),
-      skipLabel: auto ? '跳过指引' : '关闭',
+      label,
+      steps,
+      mode,
       onDone: () => {
-        if (auto && isPart(topic)) this.markGuide([topic]);
+        if (mode === 'teach') this.learned(parts);
       },
       onSkip: () => {
-        if (auto) this.markGuide(GUIDE_PARTS);
+        if (mode === 'teach') this.learned(GUIDE_PARTS);
       },
       onClose: () => {
-        this.guideTopic = null;
-        this.guideAuto = false;
+        this.lesson = null;
+        this.lessonEndT = this.host.arena.world?.t ?? 0;
         this.resumeFromGuide();
       },
     });
     if (!guide.open) return;
-    this.guideTopic = topic;
-    this.guideAuto = auto;
-    if (topic === 'battle') this.pauseForGuide();
+    this.lesson = { mode, parts };
+    if (this.view === 'battle') this.pauseForGuide();
   }
 
-  /** 界面切走时收起指引；自动出现的那一段算看过（例如在“开战”这一步直接点了开战）。 */
+  private lessonContext(mode: 'teach' | 'review'): LessonContext {
+    return {
+      arena: this.host.arena,
+      view: () => this.view,
+      mode,
+      formationMoves: () => this.formationMoves,
+      casts: () => this.casts,
+      rewardPicked: () => this.rewardPick !== null,
+    };
+  }
+
+  /** 界面切走时收起指引；正在教的这一课算学过（例如在“开战”这一步直接点了开战）。 */
   private dismissGuide(): void {
     if (!this.host.guide.open) return;
-    const topic = this.guideTopic;
-    const auto = this.guideAuto;
+    const lesson = this.lesson;
     this.host.guide.close();
-    if (auto && topic && (GUIDE_PARTS as readonly string[]).includes(topic))
-      this.markGuide([topic as GuidePart]);
+    if (lesson?.mode === 'teach') this.learned(lesson.parts);
   }
 
-  private markGuide(parts: readonly GuidePart[]): void {
+  /** 记下学过的课。教学战里学过的也记进存档，之后正式开一轮就不再重复教。 */
+  private learned(parts: readonly GuidePart[]): void {
+    for (const part of parts) this.practiceTaught.add(part);
     this.host.persistence.update((d) => {
       const seen = d.settings.guideSeen;
       d.settings.guideSeen = GUIDE_PARTS.filter((p) => seen.includes(p) || parts.includes(p));
@@ -1418,18 +1542,66 @@ export class GameScreen {
     this.refreshBattleChrome();
   }
 
-  /** 场上对手所在的区域（竞技场坐标），“集火”一步圈出它们。 */
-  private enemyArea(): ArenaRect | null {
-    const world = this.host.arena.world;
-    const foes = world?.units.filter((u) => u.alive && u.team === 1) ?? [];
-    if (!world || foes.length === 0) return null;
-    const xs = foes.map((u) => u.x);
-    const ys = foes.map((u) => u.y);
-    const x0 = Math.max(0, Math.min(...xs) - 50);
-    const x1 = Math.min(world.width, Math.max(...xs) + 50);
-    const y0 = Math.max(0, Math.min(...ys) - 70);
-    const y1 = Math.min(world.height, Math.max(...ys) + 45);
-    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  /** 教学战打完、挑完奖励：列出学会了什么，接着去玩正式的一轮。 */
+  private showPracticeDone(): void {
+    this.dismissGuide();
+    this.view = 'practice-done';
+    this.host.audio.setMusic('menu');
+    this.renderTopbar();
+    mount(this.host.side);
+    mount(this.host.stageTop);
+    mount(this.host.stageBottom);
+    this.host.side.dataset.mode = 'hidden';
+    const saved = this.host.persistence.data.run;
+    const resume = !!saved && saved.phase !== 'complete';
+    const learned = [
+      '看对手、选开局招式、拖动队员摆站位',
+      '点对手集火，空格暂停和继续',
+      '先点招式按钮，再点场地放出去',
+      '弹回、弹射、撞飞、连爆，每传一次回响 +1',
+      '赢了挑奖励；输了原样再来，或者调整再试',
+    ];
+    mount(
+      this.host.overlay,
+      h(
+        'div',
+        { class: 'overlay-center dim' },
+        h(
+          'div',
+          { class: 'summary practice-done', 'data-testid': 'practice-done' },
+          h('div', { class: 'card-kicker' }, '教学战 · 完成'),
+          h('h2', null, '都学会了！'),
+          h(
+            'ul',
+            { class: 'practice-list' },
+            ...learned.map((text) => h('li', null, uiIcon('check', 18), h('span', null, text))),
+          ),
+          h(
+            'p',
+            { class: 'muted' },
+            '教学战不影响存档。之后想再练，标题页的“新手指引”随时可以进来；游戏里点顶栏的“？”能重看当前界面的操作。',
+          ),
+          h(
+            'div',
+            { class: 'result-actions' },
+            button({
+              label: resume ? '继续我的这一轮' : '开始正式一轮',
+              kind: 'primary',
+              size: 'big',
+              icon: 'play',
+              onClick: () => (resume ? this.host.resumeRun() : this.host.newRun()),
+              testId: 'practice-play',
+            }),
+            button({
+              label: '回到标题',
+              size: 'big',
+              onClick: () => this.host.goTitle(),
+              testId: 'practice-title',
+            }),
+          ),
+        ),
+      ),
+    );
   }
 
   // ---- 菜单与按键 ----
@@ -1462,7 +1634,7 @@ export class GameScreen {
     }
     items.push({ label: '设置', action: () => this.host.openSettings() });
     items.push({
-      label: '回到标题（进度已保存）',
+      label: this.practiceRun ? '结束教学战，回到标题' : '回到标题（进度已保存）',
       action: () => {
         this.host.closeModal();
         this.host.goTitle();
