@@ -179,6 +179,11 @@ export class Guide {
     mount(this.layer, this.svg, this.card);
     this.layer.hidden = true;
     for (const type of BLOCKED) window.addEventListener(type, this.guard, { capture: true });
+    // 画布尺寸一变（例如开战时侧栏收起、画布放大）就在当帧重新摆放，
+    // 不留下按旧尺寸算出的手指位置。
+    new ResizeObserver(() => {
+      if (this.options) this.layout(performance.now());
+    }).observe(canvas);
   }
 
   get open(): boolean {

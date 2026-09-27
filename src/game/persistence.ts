@@ -13,6 +13,8 @@ export class Persistence {
   onStatus: ((status: SaveStatus) => void) | null = null;
   private timer: number | null = null;
   private dirty = false;
+  /** 已经发出、还没确认写完的异步写入数（关闭窗口可能把它们打断）。 */
+  private writing = 0;
 
   constructor(backend: SaveBackend = createSaveBackend()) {
     this.backend = backend;
@@ -49,17 +51,21 @@ export class Persistence {
     if (!this.dirty) return;
     this.dirty = false;
     this.setStatus('saving');
+    this.writing++;
     try {
       await this.backend.write(serializeSave(this.data));
       this.setStatus('saved');
     } catch {
       this.dirty = true;
       this.setStatus('error');
+    } finally {
+      this.writing--;
     }
   }
 
+  /** 关闭窗口前同步写一次最新存档：有没写的改动，或者还有异步写入没确认写完时都要写。 */
   flushNow(): void {
-    if (!this.dirty) return;
+    if (!this.dirty && this.writing === 0) return;
     this.dirty = false;
     try {
       this.backend.writeNow(serializeSave(this.data));
