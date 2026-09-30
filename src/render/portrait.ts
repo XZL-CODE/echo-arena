@@ -80,9 +80,9 @@ export function portrait(kind: UnitKind, looks: Looks | null = null, size = 72):
   canvas.height = size * dpr;
   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
   const u = fakeUnit(kind);
-  const extent = u.radius * UNIT_DRAW_SCALE * 2.9;
+  const extent = u.radius * UNIT_DRAW_SCALE * 3.15;
   const s = (size * dpr) / extent;
-  ctx.setTransform(s, 0, 0, s, (size * dpr) / 2, size * dpr * 0.62);
+  ctx.setTransform(s, 0, 0, s, (size * dpr) / 2, size * dpr * 0.64);
   drawUnit(ctx, u, {
     x: 0,
     y: 0,

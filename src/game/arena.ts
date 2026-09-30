@@ -210,7 +210,7 @@ export class ArenaController {
     for (const e of events) {
       if (e.type === 'spawn') this.renderer.markSpawn(e.unitId, world.t);
     }
-    this.renderer.fx.handle(events, (id) => world.unitById(id)?.kind);
+    this.renderer.fx.handle(events, (id) => world.unitById(id));
     this.hooks.onEvents?.(events, world);
   }
 
