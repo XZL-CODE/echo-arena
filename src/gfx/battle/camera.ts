@@ -62,8 +62,9 @@ export class CameraRig {
   private clock = 0;
   /** 关掉震屏（设置里的选项）。 */
   shakeEnabled = true;
-  /** 平时的缓慢漂移（关掉就是完全静止的俯视）。 */
+  /** 平时的缓慢漂移（关掉就是完全静止的俯视）。开关时渐变过去，不会跳一下。 */
   drift = true;
+  private driftK = 1;
   aspect = 1.6;
   /**
    * 特写机位被别的单位挡住的程度（越小越好），由战场按单位位置算。
@@ -372,10 +373,10 @@ export class CameraRig {
 
   /** 平时的机位：交战区取景 + 缓慢漂移。 */
   private basePose(out: Pose): void {
-    const yaw = this.drift
-      ? 0.06 * Math.sin(this.clock * 0.17) + 0.025 * Math.sin(this.clock * 0.41 + 1.3)
-      : 0;
-    const d = this.dist * (this.drift ? 1 + 0.015 * Math.sin(this.clock * 0.23) : 1);
+    const k = this.driftK;
+    const yaw =
+      k * (0.06 * Math.sin(this.clock * 0.17) + 0.025 * Math.sin(this.clock * 0.41 + 1.3));
+    const d = this.dist * (1 + k * 0.015 * Math.sin(this.clock * 0.23));
     const dir = this.dir.clone().applyAxisAngle(UP, yaw);
     out.target.copy(this.center);
     out.pos.copy(this.center).addScaledVector(dir, d);
@@ -400,6 +401,7 @@ export class CameraRig {
 
   update(dt: number): void {
     this.clock += dt;
+    this.driftK += ((this.drift ? 1 : 0) - this.driftK) * (1 - Math.exp(-dt * 1.2));
     // 取景慢慢跟过去：拉远比推近快一点，免得有人跑出画面
     const rate = this.goalDist > this.dist ? 1.6 : 0.8;
     this.dist += (this.goalDist - this.dist) * (1 - Math.exp(-dt * rate));

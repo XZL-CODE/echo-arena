@@ -60,8 +60,20 @@ export class BattleView implements Stagehand {
   private shotUnit = 0;
   /** 特写时挡在镜头前、先藏起来的单位（镜头拉回后再出现）。 */
   private readonly hidden = new Set<number>();
-  /** 镜头自动推近交战区域（战前摆站位时关掉，看全场）。 */
-  autoFrame = true;
+  /**
+   * 镜头自动推近交战区域并缓慢漂移。战前摆站位时关掉：看全场、镜头不动，
+   * 拖动宠物落到的位置只取决于指针。
+   */
+  get autoFrame(): boolean {
+    return this.autoFrameOn;
+  }
+
+  set autoFrame(on: boolean) {
+    this.autoFrameOn = on;
+    this.rig.drift = on;
+  }
+
+  private autoFrameOn = true;
   private frameClock = 0;
   private time = 0;
   private slow = { scale: 1, left: 0 };
