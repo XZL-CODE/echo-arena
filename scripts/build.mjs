@@ -29,12 +29,16 @@ export function copyPublic() {
   }
 }
 
-/** 把页面里 import map 的哈希写进内容安全策略（格式化工具改了缩进也不会失效）。 */
+/**
+ * 把页面里 import map 的哈希写进内容安全策略（格式化工具改了缩进也不会失效）。
+ * 浏览器解析 HTML 时先把换行统一成 \n 再算哈希；Windows 上检出的文件是 \r\n，这里照样统一。
+ */
 function pinImportMap(file) {
   const html = fs.readFileSync(file, 'utf8');
   const map = IMPORT_MAP.exec(html);
   if (!map) return;
-  const hash = crypto.createHash('sha256').update(map[1]).digest('base64');
+  const content = map[1].replace(/\r\n?/g, '\n');
+  const hash = crypto.createHash('sha256').update(content).digest('base64');
   const pinned = html.replace(/'sha256-[A-Za-z0-9+/=]+'/, `'sha256-${hash}'`);
   if (!pinned.includes(hash)) throw new Error(`${file} 的内容安全策略里缺少 import map 的哈希。`);
   if (pinned !== html) fs.writeFileSync(file, pinned);
