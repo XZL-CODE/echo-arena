@@ -93,8 +93,15 @@ export function portrait(formId: string, options: PortraitOptions = {}): string 
     target = new THREE.Vector3(0, head.y - bp.height * 0.12, 0);
     dist = bp.height * 1.35;
   } else {
-    target = new THREE.Vector3(0, bp.height * 0.5, 0);
-    dist = bp.height * 2.6 * Math.max(1, (h / w) * 0.8);
+    // 全身：按包围盒取景，四足和长尾巴也能完整放进画面
+    const box = new THREE.Box3().setFromBufferAttribute(
+      bp.body.getAttribute('position') as THREE.BufferAttribute,
+    );
+    const size = box.getSize(new THREE.Vector3());
+    const wide = Math.max(size.x, size.z) * (0.75 + 0.25 * Math.abs(Math.sin(yaw)));
+    target = new THREE.Vector3(0, box.min.y + size.y * 0.5, 0);
+    const fit = Math.max(size.y * 1.12, (wide * 1.1) / (w / h));
+    dist = fit / (2 * Math.tan(THREE.MathUtils.degToRad(12)));
   }
   camera.position.set(target.x, target.y + dist * 0.12, target.z + dist);
   camera.lookAt(target);

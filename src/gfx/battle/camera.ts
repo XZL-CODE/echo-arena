@@ -65,6 +65,11 @@ export class CameraRig {
   /** 平时的缓慢漂移（关掉就是完全静止的俯视）。 */
   drift = true;
   aspect = 1.6;
+  /**
+   * 特写机位被别的单位挡住的程度（越小越好），由战场按单位位置算。
+   * 特写从几个候选机位里挑挡得最少的；没有时用默认机位。
+   */
+  occlusion: ((eye: THREE.Vector3, target: THREE.Vector3) => number) | null = null;
 
   constructor() {
     this.fit(1.6);
@@ -139,12 +144,12 @@ export class CameraRig {
       return;
     }
     // 四周留出特效和血条的余地，并限制最小取景，免得贴得太近
-    let x0 = box.minX - 1.4;
-    let x1 = box.maxX + 1.4;
-    let z0 = box.minZ - 1.1;
-    let z1 = box.maxZ + 0.9;
-    const minW = 7.2;
-    const minD = 4;
+    let x0 = box.minX - 1.1;
+    let x1 = box.maxX + 1.1;
+    let z0 = box.minZ - 1;
+    let z1 = box.maxZ + 0.8;
+    const minW = 6.4;
+    const minD = 3.6;
     if (x1 - x0 < minW) {
       const c = (x0 + x1) / 2;
       x0 = c - minW / 2;
@@ -239,23 +244,48 @@ export class CameraRig {
    */
   skillShot(focus: THREE.Vector3, height: number, facing: number): void {
     if (this.shot) return;
-    const side = this.viewSide();
-    // 往施放者面朝的那一侧偏，拍到脸而不是后脑勺
+    const view = this.viewSide();
+    // 往施放者面朝的那一侧偏，拍到脸而不是后脑勺；被别的单位挡住时换个角度或退远一点
     const fwd = new THREE.Vector3(Math.cos(facing), 0, Math.sin(facing));
-    const turn = Math.sign(side.x * fwd.z - side.z * fwd.x) || 1;
-    side.applyAxisAngle(UP, -turn * 0.38);
-    const dist = 2.4 + height * 2.1;
+    const turn = Math.sign(view.x * fwd.z - view.z * fwd.x) || 1;
     const elev = THREE.MathUtils.degToRad(22);
     const target = focus.clone().addScaledVector(UP, height * 0.6);
-    const pos = target
-      .clone()
-      .addScaledVector(side, Math.cos(elev) * dist)
-      .addScaledVector(UP, Math.sin(elev) * dist);
+    const candidates: THREE.Vector3[] = [];
+    for (const angle of [0.38, 0.95, -0.2]) {
+      for (const far of [1, 1.35]) {
+        const side = view.clone().applyAxisAngle(UP, -turn * angle);
+        const dist = (2.4 + height * 2.1) * far;
+        candidates.push(
+          target
+            .clone()
+            .addScaledVector(side, Math.cos(elev) * dist)
+            .addScaledVector(UP, Math.sin(elev) * dist),
+        );
+      }
+    }
+    const pos = this.clearest(candidates, (c) => c, target);
     this.begin(
       'skill',
       [{ pos, target, fov: 30, move: 0.22, hold: 0.55, orbit: 0.22 * turn, dolly: 0.35 }],
       0.5,
     );
+  }
+
+  /** 从候选里挑视线挡得最少的（同样清楚时取靠前的，也就是默认机位）。 */
+  private clearest<T>(candidates: T[], eyeOf: (c: T) => THREE.Vector3, target: THREE.Vector3): T {
+    const first = candidates[0] as T;
+    const score = this.occlusion;
+    if (!score) return first;
+    let best = first;
+    let bestScore = Infinity;
+    candidates.forEach((c, i) => {
+      const s = score(eyeOf(c), target) + i * 0.04;
+      if (s < bestScore) {
+        bestScore = s;
+        best = c;
+      }
+    });
+    return best;
   }
 
   /**
@@ -267,17 +297,30 @@ export class CameraRig {
     facing: number,
     target: THREE.Vector3 | null,
   ): void {
-    const fwd = new THREE.Vector3(Math.cos(facing), 0, Math.sin(facing));
-    // 侧向：朝镜头这一边（+z）的那一侧
-    const side = new THREE.Vector3(-fwd.z, 0, fwd.x);
-    if (side.z < 0) side.negate();
+    const face = new THREE.Vector3(Math.cos(facing), 0, Math.sin(facing));
     const h = Math.max(0.8, height);
     const heroTarget = focus.clone().addScaledVector(UP, h * 0.68);
-    const heroPos = focus
-      .clone()
-      .addScaledVector(fwd, 1.5 + h * 1.35)
-      .addScaledVector(side, 0.9 + h * 0.55)
-      .addScaledVector(UP, h * 0.42);
+    // 正面偏侧仰拍：默认在朝镜头这一边（+z），被挡住时换到另一边、转个角度或退远一点
+    const heroCandidates: THREE.Vector3[] = [];
+    for (const flip of [1, -1]) {
+      for (const angle of [0, 0.5, -0.5]) {
+        for (const far of [1, 1.3]) {
+          const fwd = face.clone().applyAxisAngle(UP, angle);
+          const side = new THREE.Vector3(-fwd.z, 0, fwd.x);
+          if (side.z * flip < 0) side.negate();
+          heroCandidates.push(
+            focus
+              .clone()
+              .addScaledVector(fwd, (1.5 + h * 1.35) * far)
+              .addScaledVector(side, (0.9 + h * 0.55) * far)
+              .addScaledVector(UP, h * 0.42 * far),
+          );
+        }
+      }
+    }
+    const heroPos = this.clearest(heroCandidates, (c) => c, heroTarget);
+    const side = new THREE.Vector3(-face.z, 0, face.x);
+    if (side.z < 0) side.negate();
     const poses: ShotPose[] = [
       {
         pos: heroPos,
@@ -296,13 +339,23 @@ export class CameraRig {
       const perp = new THREE.Vector3(-line.z, 0, line.x).normalize();
       if (perp.lengthSq() < 1e-6) perp.copy(side);
       if (perp.z < 0) perp.negate();
-      const dist = Math.max(4.5, span * 0.95 + 3);
+      const aim = mid.clone().addScaledVector(UP, 0.7);
+      // 侧面看出手：默认从镜头这一边，挡住时换另一边或退远
+      const sideCandidates: THREE.Vector3[] = [];
+      for (const flip of [1, -1]) {
+        for (const far of [1, 1.3]) {
+          const dist = Math.max(4.5, span * 0.95 + 3) * far;
+          sideCandidates.push(
+            mid
+              .clone()
+              .addScaledVector(perp, dist * flip)
+              .addScaledVector(UP, 1.8 + dist * 0.28),
+          );
+        }
+      }
       poses.push({
-        pos: mid
-          .clone()
-          .addScaledVector(perp, dist)
-          .addScaledVector(UP, 1.8 + dist * 0.28),
-        target: mid.clone().addScaledVector(UP, 0.7),
+        pos: this.clearest(sideCandidates, (c) => c, aim),
+        target: aim,
         fov: 34,
         move: 0.3,
         hold: 0.85,

@@ -136,6 +136,46 @@ export class Effects {
     this.push(e);
   }
 
+  /**
+   * 预热：在 at 附近每种特效各放一个几乎看不见的，让着色器在战前就编译好，
+   * 开打后第一次放招不会卡一下。
+   */
+  warmup(at: THREE.Vector3): void {
+    const p = at.clone().setY(-0.5);
+    const q = p.clone().add(new THREE.Vector3(0.01, 0, 0));
+    const tiny = 0.002;
+    this.slash(p, 0, tiny, 0xffffff, 0.3);
+    this.crescent(p, q, tiny, 0xffffff, 0.3);
+    this.shock(p, tiny, tiny, 0xffffff, 0.3);
+    this.band(p, tiny, tiny, tiny, 0xffffff, 0.3);
+    this.vortex(p, tiny, tiny, 0xffffff, 0.3);
+    this.spiral(p, tiny, tiny, 0xffffff, 0.3);
+    this.fireball(p, tiny, 0.3);
+    this.splash(p, tiny, 0xffffff, 0.3);
+    this.orb(p, tiny, 0xffffff, 0.3);
+    this.barrierAt(p, new THREE.Vector3(1, 0, 0), 0xffffff);
+    this.ring(p, tiny, tiny, 0xffffff, 0.3);
+    this.pillar(p, tiny, tiny, 0xffffff, 0.3);
+    this.flash(p, tiny, 0xffffff, 0.3);
+    this.beam(p, q, tiny, 0xffffff, 0.3);
+    this.bolt(p, q, 0xffffff, 0.3, tiny, 0.1, 0);
+    this.circle(p, tiny, 0xffffff, 0.3);
+    this.dome(() => p, tiny, 0xffffff, 0.3);
+    this.wall(p, 0, tiny, tiny, 0xffffff, 0.3);
+    this.decal(p, tiny, 'scorch', 0.3);
+    for (const kind of ['rock', 'crystal', 'leaf', 'ice', 'ember', 'petal'] as const) {
+      this.debris.burst({
+        kind,
+        at: p,
+        count: 1,
+        speed: [0, 0],
+        size: [tiny, tiny],
+        color: 0xffffff,
+        life: [0.2, 0.2],
+      });
+    }
+  }
+
   /** 过 delay 秒（特效时间）再执行（分段演出：先蓄力、再爆发）。清场时取消。 */
   after(delay: number, fn: () => void): void {
     this.pending.push({ t: delay, fn });

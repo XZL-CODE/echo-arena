@@ -1,11 +1,11 @@
-// 冒烟测试：客户端能打开、开始一轮、进入战斗，并把存档写进用户数据目录。
+// 冒烟测试：客户端能打开、选伙伴开始一轮、进入战斗，并把存档写进用户数据目录。
 // CI 在 macOS 与 Windows 上也用打包好的程序运行全部端到端测试。
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { launchClient, screenshotPath, skipGuide } from './client';
 
-test('客户端启动、开始一轮并写入本地存档', async () => {
+test('客户端启动、选伙伴开始一轮并写入本地存档', async () => {
   const { app, page, userData } = await launchClient();
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -17,14 +17,16 @@ test('客户端启动、开始一轮并写入本地存档', async () => {
   expect(await page.evaluate(() => document.body.dataset.ready)).toBe('file');
   await page.screenshot({ path: screenshotPath('smoke-title'), animations: 'disabled' });
 
-  await page.click('[data-testid=start]');
-  await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  await page.click('[data-testid=new-run]');
+  await expect(page.locator('[data-testid=depart]')).toBeVisible();
+  await page.click('[data-testid=depart]');
+  await expect(page.locator('[data-testid=start-battle]')).toBeVisible();
   // 新安装会弹出新手指引（详细流程见 guide.spec.ts），冒烟测试直接跳过。
   await skipGuide(page);
   await page.screenshot({ path: screenshotPath('smoke-prep'), animations: 'disabled' });
-  await page.click('[data-testid=fight]');
+  await page.click('[data-testid=start-battle]');
   await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
-  await page.waitForTimeout(2500);
+  await expect(page.locator('[data-testid=time]')).not.toHaveText('0:00', { timeout: 10_000 });
   await page.screenshot({ path: screenshotPath('smoke-battle') });
 
   // 内置拼写检查在 Windows / Linux 上会联网下载词典，客户端启动时把它关掉了。
@@ -41,5 +43,7 @@ test('客户端启动、开始一轮并写入本地存档', async () => {
   expect(requests.filter((url) => !/^(app|data|blob):/.test(url))).toEqual([]);
   const save = JSON.parse(fs.readFileSync(path.join(userData, 'save.json'), 'utf8'));
   expect(save.app).toBe('echo-arena');
+  expect(save.version).toBe(4);
   expect(save.run.inBattle).toBe(true);
+  expect(save.run.legion.length).toBe(5);
 });

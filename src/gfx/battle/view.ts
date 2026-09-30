@@ -28,6 +28,10 @@ export interface BattleViewSettings {
 export type UltNamer = (unit: ViewUnit) => { skill: string; name: string };
 
 const _v = new THREE.Vector3();
+const _c = new THREE.Vector3();
+const _seg = new THREE.Vector3();
+const _rel = new THREE.Vector3();
+const _aim = new THREE.Vector3();
 const _ray = new THREE.Raycaster();
 const _plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
@@ -51,6 +55,11 @@ export class BattleView implements Stagehand {
   namer: UltNamer = (u) => ({ skill: '奥义', name: `${u.species}` });
   hoverId = 0;
   private lastSkillCam = -99;
+  private lastUltCam = -99;
+  /** 当前特写拍的是谁。 */
+  private shotUnit = 0;
+  /** 特写时挡在镜头前、先藏起来的单位（镜头拉回后再出现）。 */
+  private readonly hidden = new Set<number>();
   /** 镜头自动推近交战区域（战前摆站位时关掉，看全场）。 */
   autoFrame = true;
   private frameClock = 0;
@@ -76,6 +85,7 @@ export class BattleView implements Stagehand {
     this.scene.add(this.particles.group, this.effects.group, this.shots.group);
     this.director = new FxDirector(this);
     this.setStage('meadow');
+    this.rig.occlusion = (eye, target) => this.occlusion(eye, target);
   }
 
   get gentle(): boolean {
@@ -122,6 +132,7 @@ export class BattleView implements Stagehand {
       v.dispose();
     }
     this.views.clear();
+    this.hidden.clear();
     this.byId.clear();
     this.particles.clear();
     this.effects.clear();
@@ -132,8 +143,27 @@ export class BattleView implements Stagehand {
     this.stop = 0;
     this.world = null;
     this.lastSkillCam = -99;
+    this.lastUltCam = -99;
     this.rig.frame(null);
     this.rig.snap();
+  }
+
+  /** 战前预热特效与粒子的着色器（开打后第一次放招不卡）。 */
+  warmup(): void {
+    const at = new THREE.Vector3(0, 0, 0);
+    this.effects.warmup(at);
+    for (const additive of [true, false]) {
+      this.particles.burst({
+        count: 1,
+        at: at.clone().setY(-0.5),
+        speed: [0, 0],
+        life: [0.2, 0.2],
+        size: [0.001, 0.001],
+        color: 0xffffff,
+        cell: 'glow',
+        additive,
+      });
+    }
   }
 
   /** 模拟时间应当放慢的倍数（慢动作、命中停顿、大招特写）。 */
@@ -200,16 +230,22 @@ export class BattleView implements Stagehand {
     const u = this.byId.get(unitId);
     const v = this.views.get(unitId);
     if (!u || !v) return;
-    if (this.settings.cinematics) {
+    // 完整的大招特写有间隔：人形态一多，大招一个接一个，每个都停下来拍会把战斗拖得很慢。
+    // 我方的大招间隔短一些，对手的长一些；没轮上的只给一点慢动作和径向模糊。
+    const gap = this.time - this.lastUltCam;
+    const full = this.settings.cinematics && !this.rig.inUltShot && gap > (u.team === 0 ? 6 : 11);
+    if (full) {
       const names = this.namer(u);
       this.cutin.show(v.formId, u.element, names.skill, names.name, u.team);
+      this.shotUnit = unitId;
       this.rig.ultShot(v.world.clone(), v.height, u.facing, target ?? null);
       // 仰拍蓄力这一段几乎停住，切到侧面出手时恢复一些速度
       this.slowmo(0.1, 1.1);
       this.screen.dim = 1;
+      this.lastUltCam = this.time;
       this.lastSkillCam = this.time + 1.5;
     } else {
-      this.slowmo(0.5, 0.4);
+      this.slowmo(0.55, 0.3);
     }
     this.radial(v.center(), 0.035);
   }
@@ -223,6 +259,7 @@ export class BattleView implements Stagehand {
     // 自己一方、进化后的技能优先给镜头
     if (u.team !== 0 && !big && Math.random() < 0.5) return;
     this.lastSkillCam = this.time;
+    this.shotUnit = unitId;
     this.rig.skillShot(v.world.clone(), v.height, u.facing);
     this.slowmo(0.5, 0.35);
   }
@@ -253,11 +290,10 @@ export class BattleView implements Stagehand {
     }
     for (const [id, v] of this.views) {
       if (!this.byId.has(id) || v.gone) {
-        if (!this.byId.has(id) || v.gone) {
-          this.scene.remove(v.object);
-          v.dispose();
-          this.views.delete(id);
-        }
+        this.scene.remove(v.object);
+        v.dispose();
+        this.views.delete(id);
+        this.hidden.delete(id);
       }
     }
     this.shots.sync(world.projectiles, alpha, dt, this.particles);
@@ -286,7 +322,7 @@ export class BattleView implements Stagehand {
     if (xs.length === 0) return null;
     xs.sort((a, b) => a - b);
     zs.sort((a, b) => a - b);
-    const cut = xs.length >= 8 ? Math.floor(xs.length * 0.1) : 0;
+    const cut = xs.length >= 6 ? Math.floor(xs.length * 0.15) : 0;
     const lo = cut;
     const hi = xs.length - 1 - cut;
     return {
@@ -295,6 +331,55 @@ export class BattleView implements Stagehand {
       minZ: (zs[lo] as number) - 0.4,
       maxZ: (zs[hi] as number) + 0.4,
     };
+  }
+
+  /**
+   * 一条视线被单位挡住的程度（特写挑机位用）：挡在镜头和主角之间的单位按离视线多近、
+   * 离镜头多近计分；镜头贴着或钻进单位里最严重。主角自己不算。
+   */
+  private occlusion(eye: THREE.Vector3, target: THREE.Vector3): number {
+    let score = 0;
+    for (const v of this.views.values()) {
+      if (v.id === this.shotUnit || v.gone) continue;
+      score += this.blocking(v, eye, target);
+    }
+    return score;
+  }
+
+  private blocking(v: UnitView, eye: THREE.Vector3, target: THREE.Vector3): number {
+    // 单位按一个球算：大个子（首领）的身体比模拟里的碰撞半径长得多，按高度放大
+    const r = Math.max(0.4, v.height * (v.height > 2 ? 0.5 : 0.36));
+    const c = v.center(_c);
+    if (c.distanceTo(eye) < r + 0.7) return 6;
+    _seg.copy(target).sub(eye);
+    const t = _rel.copy(c).sub(eye).dot(_seg) / Math.max(1e-6, _seg.lengthSq());
+    if (t <= 0.02 || t >= 0.92) return 0;
+    const d = _rel.copy(eye).addScaledVector(_seg, t).distanceTo(c);
+    return d < r ? (1 - d / r) * (1.6 - t) : 0;
+  }
+
+  /** 特写时把挡在镜头和主角之间、或者贴着镜头的单位藏起来；镜头拉回后全部恢复。 */
+  private cullForShot(): void {
+    const subject = this.rig.inShot ? this.views.get(this.shotUnit) : undefined;
+    if (!subject) {
+      if (this.hidden.size === 0) return;
+      for (const id of this.hidden) {
+        const v = this.views.get(id);
+        if (v) v.object.visible = !v.gone;
+      }
+      this.hidden.clear();
+      return;
+    }
+    const eye = this.rig.camera.position;
+    const aim = subject.center(_aim);
+    for (const v of this.views.values()) {
+      if (v === subject || v.gone) continue;
+      const hide = this.blocking(v, eye, aim) > 0;
+      if (hide === this.hidden.has(v.id)) continue;
+      v.object.visible = !hide;
+      if (hide) this.hidden.add(v.id);
+      else this.hidden.delete(v.id);
+    }
   }
 
   handle(events: readonly FxEvent[]): void {
@@ -312,6 +397,7 @@ export class BattleView implements Stagehand {
     this.slow.left = Math.max(0, this.slow.left - dt);
     this.stop = Math.max(0, this.stop - dt);
     this.rig.update(dt);
+    this.cullForShot();
     this.stage?.update(this.time);
     this.particles.quality = this.engine.preset.particles;
     this.particles.update(dt * (this.stop > 0 ? 0.2 : 1));
@@ -329,8 +415,8 @@ export class BattleView implements Stagehand {
     g.uRadial.value = s.radial;
     g.uCenter.value.copy(s.center);
     g.uTint.value.set(0.42, 0.4, 0.55, s.dim * 0.5);
-    // 特写时血条、数字退到后面；近景里发光物占的画面大，泛光收一些
-    const fadeGoal = this.rig.inUltShot ? 1 : this.rig.inShot ? 0.55 : 0;
+    // 特写时血条、数字退到后面（只是变淡，敌我和血量仍然看得见）；近景里发光物占的画面大，泛光收一些
+    const fadeGoal = this.rig.inUltShot ? 0.6 : this.rig.inShot ? 0.35 : 0;
     this.hud.fade += (fadeGoal - this.hud.fade) * (1 - Math.exp(-dt * 10));
     const bloomGoal = this.rig.inShot ? 0.38 : 0.6;
     this.engine.bloomStrength += (bloomGoal - this.engine.bloomStrength) * (1 - Math.exp(-dt * 6));
@@ -347,7 +433,7 @@ export class BattleView implements Stagehand {
     const list: HudUnit[] = [];
     for (const v of this.views.values()) {
       const u = this.byId.get(v.id);
-      if (u) list.push({ u, top: v.top, radius: u.radius });
+      if (u && !this.hidden.has(v.id)) list.push({ u, top: v.top, radius: u.radius });
     }
     this.hud.draw(list, this.rig.camera, this.world?.focusId ?? 0, this.hoverId, this.time, dt);
   }
@@ -418,8 +504,13 @@ export class BattleView implements Stagehand {
     quality: number;
     drawMs: number;
     fps: number;
+    /** 正在拍的特写：0 没有，1 技能特写，2 大招特写。 */
+    shot: number;
+    shotUnit: number;
   } {
     return {
+      shot: this.rig.inUltShot ? 2 : this.rig.inShot ? 1 : 0,
+      shotUnit: this.rig.inShot ? this.shotUnit : 0,
       units: this.views.size,
       particles: this.particles.alive,
       effects: this.effects.count,

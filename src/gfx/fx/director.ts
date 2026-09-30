@@ -75,7 +75,16 @@ export type FxEvent =
     }
   | { type: 'impact'; x: number; y: number; strength: number; echo: number }
   | { type: 'status'; unitId: number; status: string; duration: number }
-  | { type: 'zone'; zoneId: number; kind: string; x: number; y: number; r: number }
+  | {
+      type: 'zone';
+      zoneId: number;
+      kind: string;
+      x: number;
+      y: number;
+      r: number;
+      angle?: number;
+      length?: number;
+    }
   | { type: 'echo'; x: number; y: number; level: number }
   | { type: 'death'; unitId: number; team: number; x: number; y: number }
   | { type: 'spawn'; unitId: number }
@@ -1279,6 +1288,48 @@ export class FxDirector {
   private zone(e: Extract<FxEvent, { type: 'zone' }>): void {
     const at = toWorld(e.x, e.y, new THREE.Vector3());
     const r = e.r / 100;
+    // 线形区域：从 (x, y) 沿 angle 延伸 length（燃烧带、岩刺带、水墙）
+    const len = typeof e.length === 'number' ? e.length / 100 : 0;
+    if (len > 0 && typeof e.angle === 'number') {
+      const dir = new THREE.Vector3(Math.cos(e.angle), 0, Math.sin(e.angle));
+      if (e.kind === 'spikes' || e.kind === 'spikeRing') {
+        // 一排岩刺顺着方向依次破土
+        const pts: THREE.Vector3[] = [];
+        const n = Math.max(4, Math.round(len * 3.2));
+        for (let i = 0; i < n; i++) {
+          const side = (Math.random() - 0.5) * r * 1.4;
+          pts.push(
+            at
+              .clone()
+              .addScaledVector(dir, (i + 0.5) * (len / n))
+              .add(new THREE.Vector3(-dir.z * side, 0, dir.x * side)),
+          );
+        }
+        this.s.effects.spikes(pts, 0.9 + r * 0.4, 0x9a8a7a, 1.4, 0.035);
+        this.s.effects.chunks({
+          kind: 'rock',
+          at: at
+            .clone()
+            .addScaledVector(dir, len * 0.5)
+            .setY(0.2),
+          count: 8,
+          speed: [1.5, 3.5],
+          up: 2,
+          size: [0.06, 0.14],
+          color: 0xb8a088,
+          color2: 0x7a6048,
+          radius: len * 0.4,
+        });
+        return;
+      }
+      if (e.kind === 'waterWall') {
+        const center = at.clone().addScaledVector(dir, len / 2);
+        this.s.effects.wall(center, -e.angle, len, 2.2, 0x7fe0ff, 4);
+        this.s.effects.splash(center, Math.min(1.4, len * 0.3), 0x8fe6ff, 0.7);
+        return;
+      }
+      if (e.kind === 'burn') return;
+    }
     switch (e.kind) {
       case 'vines':
         this.s.effects.vines(at, r, 10, 2.5, 0x3aa04a);
@@ -1315,6 +1366,30 @@ export class FxDirector {
     const at = toWorld(z.x, z.y, _b);
     const r = z.r / 100;
     const p = this.s.particles;
+    const len = typeof z.length === 'number' ? z.length / 100 : 0;
+    if (z.kind === 'burn' && len > 0 && typeof z.angle === 'number') {
+      // 燃烧带：沿线随机冒火
+      if (Math.random() < dt * 14 * (1 + len)) {
+        const k = Math.random() * len;
+        const side = (Math.random() - 0.5) * r * 2;
+        const cx = Math.cos(z.angle);
+        const cz = Math.sin(z.angle);
+        p.burst({
+          count: 1,
+          at: at.clone().add(new THREE.Vector3(cx * k - cz * side, 0, cz * k + cx * side)),
+          speed: [0.1, 0.3],
+          life: [0.4, 0.7],
+          size: [0.2, 0.34],
+          grow: 0.3,
+          color: 0xffc050,
+          color2: 0xff3010,
+          intensity: 1.8,
+          cell: 'flame',
+          up: 0.9,
+        });
+      }
+      return;
+    }
     if (z.kind === 'burn' && Math.random() < dt * 20 * r) {
       p.burst({
         count: 1,

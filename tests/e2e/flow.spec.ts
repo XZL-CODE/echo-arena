@@ -1,101 +1,98 @@
-// 流程测试：打完一场到下一场、战斗中途关闭后继续、输了重来、设置保存与清除存档。
-// 用测试钩子（window.__echo）快进战斗、直接摆出指定对局，结果由固定种子决定。
+// 流程测试：打完一场收服与进化、战斗中途关闭后继续、输了重来、设置保存与清除存档、
+// 暂停与集火、拖动站位、整轮结算。用测试钩子（window.__echo）快进战斗、直接摆出指定对局，
+// 开战前停住实时推进，结果由固定种子决定。
 import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { launchClient, readSave, ready, screenshotPath, skipGuide, type SaveFile } from './client';
+import {
+  fight,
+  finishBattle,
+  launchClient,
+  newRun,
+  patchRun,
+  readSave,
+  ready,
+  screenshotPath,
+  skipGuide,
+  state,
+  type HookWindow,
+} from './client';
 
-interface Hooks {
-  fastForward(seconds: number): void;
-  result(): 'win' | 'lose' | null;
-  run(): SaveFile['run'];
-  setupRun(encounterId: string, modules: Array<[string, number]>, matchIndex?: number): void;
-}
-type HookWindow = { __echo: Hooks };
+/** 十只人形态：稳定打赢最后一场的首领战。 */
+const ALL_STARS = [
+  'fox',
+  'bird',
+  'otter',
+  'turtle',
+  'bunny',
+  'deer',
+  'cat',
+  'wolf',
+  'bear',
+  'lizard',
+].map((species) => ({ species, form: 3 }));
 
-async function setupRun(
-  page: Page,
-  encounterId: string,
-  modules: Array<[string, number]>,
-  matchIndex: number,
-): Promise<void> {
-  await page.evaluate(
-    ([id, mods, index]) => (window as unknown as HookWindow).__echo.setupRun(id, mods, index),
-    [encounterId, modules, matchIndex] as const,
-  );
-  await expect(page.locator('[data-testid=fight]')).toBeVisible();
-  await skipGuide(page);
-}
-
-async function currentRun(page: Page): Promise<NonNullable<SaveFile['run']>> {
-  const run = await page.evaluate(() => (window as unknown as HookWindow).__echo.run());
+async function currentRun(page: Page) {
+  const run = (await state(page)).run;
   if (!run) throw new Error('没有进行中的一轮');
   return run;
 }
 
-/** 快进到分出胜负，返回结果。 */
-async function finishBattle(page: Page): Promise<string> {
-  for (let i = 0; i < 12; i++) {
-    const result = await page.evaluate(() => {
-      const echo = (window as unknown as HookWindow).__echo;
-      echo.fastForward(20);
-      return echo.result();
-    });
-    if (result) return result;
-  }
-  throw new Error('战斗没有在 240 秒内结束');
+/** 进化演出：跳过后点“继续”。 */
+async function skipEvolution(page: Page): Promise<void> {
+  await expect(page.locator('[data-testid=evolve]')).toBeVisible();
+  await page.click('[data-testid=evolve-skip]');
+  await page.click('[data-testid=evolve-done]');
 }
 
-async function fight(page: Page): Promise<void> {
-  await page.click('[data-testid=fight]');
-  await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
-}
-
-test('打赢一场、挑选奖励、进入下一场，进度写进存档', async () => {
+test('打赢一场、收服与进化，进入下一场，进度写进存档', async () => {
   const { app, page, userData } = await launchClient({ hooks: true });
   const errors = await ready(page);
-  await setupRun(page, 'volley', [['reflect', 1]], 0);
+  await newRun(page);
+  await skipGuide(page);
   await fight(page);
   expect(await finishBattle(page)).toBe('win');
 
   await expect(page.locator('[data-testid=result]')).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: screenshotPath('flow-result'), animations: 'disabled' });
-  await page.click('[data-testid=result-next]');
-  await expect(page.locator('[data-testid=reward]')).toBeVisible();
-  const offers = page.locator('[data-testid^=offer-]');
-  await expect(offers).toHaveCount(3);
-  const picked = ((await offers.first().getAttribute('data-testid')) ?? '').slice('offer-'.length);
-  await offers.first().click();
+  await page.click('[data-testid=to-reward]');
+  await expect(page.locator('[data-testid=claim]')).toBeVisible();
+  const before = await currentRun(page);
+  const offer = before.rewards as {
+    capture: Array<{ species: string; form: number }>;
+    evolve: Array<{ uid: number; to: number }>;
+  };
+  expect(offer.capture.length).toBeGreaterThan(0);
+  expect(offer.evolve.length).toBeGreaterThan(0);
+  await page.click('[data-testid=capture-0]');
+  await page.click('[data-testid=evolve-0]');
   await page.screenshot({ path: screenshotPath('flow-reward'), animations: 'disabled' });
-  await page.click('[data-testid=reward-confirm]');
+  await page.click('[data-testid=claim]');
+  await skipEvolution(page);
 
-  await expect(page.locator('[data-testid=fight]')).toBeVisible();
-  await expect(page.locator('.match-no')).toHaveText('第 2 / 7 场');
+  await expect(page.locator('[data-testid=start-battle]')).toBeVisible();
   const run = await currentRun(page);
   expect(run.matchIndex).toBe(1);
-  expect(run.records[0]?.won).toBe(true);
-  expect(run.levels[picked]).toBeGreaterThanOrEqual(1);
+  expect(run.phase).toBe('prep');
+  expect(run.legion.length).toBe(before.legion.length + 1);
+  const evolved = offer.evolve[0];
+  expect(run.legion.find((p) => p.uid === evolved?.uid)?.form).toBe(evolved?.to);
 
   await app.close();
   const save = readSave(userData);
   expect(save?.run?.matchIndex).toBe(1);
   expect(save?.run?.phase).toBe('prep');
-  expect(save?.run?.levels[picked]).toBe(run.levels[picked]);
+  expect(save?.run?.legion.length).toBe(run.legion.length);
+  expect(save?.codex.length).toBeGreaterThan(before.legion.length);
   expect(errors).toEqual([]);
 });
 
-test('战斗中关闭客户端，重开后回到这一场的战前准备', async () => {
+test('战斗中关闭客户端，重开后回到这一场的战前准备，军团不变', async () => {
   const first = await launchClient({ hooks: true });
   const firstErrors = await ready(first.page);
-  await setupRun(
-    first.page,
-    'shellwall',
-    [
-      ['charge', 1],
-      ['ricochet', 1],
-    ],
-    2,
-  );
+  await newRun(first.page);
+  await skipGuide(first.page);
+  const legion = (await currentRun(first.page)).legion;
   await fight(first.page);
   await first.page.evaluate(() => (window as unknown as HookWindow).__echo.fastForward(5));
   await first.app.close();
@@ -107,40 +104,43 @@ test('战斗中关闭客户端，重开后回到这一场的战前准备', async
   await expect(second.page.locator('[data-testid=resume-note]')).toContainText('战斗中离开');
   await second.page.screenshot({ path: screenshotPath('flow-resume-title') });
   await second.page.click('[data-testid=continue]');
-  await expect(second.page.locator('[data-testid=fight]')).toBeVisible();
-  await expect(second.page.locator('[data-testid=match-name]')).toHaveText('壳壳盾阵');
+  await expect(second.page.locator('[data-testid=start-battle]')).toBeVisible();
   const run = await currentRun(second.page);
-  expect(run.matchIndex).toBe(2);
+  expect(run.matchIndex).toBe(0);
   expect(run.inBattle).toBe(false);
-  expect(run.levels).toEqual({ charge: 1, ricochet: 1 });
-  expect(run.records[2]?.attempts).toBe(1);
+  expect(run.attempts[0]).toBe(1);
+  expect(run.legion).toEqual(legion);
   await second.app.close();
   expect(errors).toEqual([]);
 });
 
-test('输了可以原样重来或回去调整，已拿到的招式不丢', async () => {
+test('输了可以原样再来或回去调整，军团不丢', async () => {
   const { app, page } = await launchClient({ hooks: true });
   const errors = await ready(page);
-  await setupRun(page, 'king', [['bulwark', 1]], 6);
+  await newRun(page);
+  await skipGuide(page);
+  // 一只幼年叶耳兔去打最后一场的首领：必输
+  await patchRun(page, 6, [{ species: 'bunny', form: 1 }]);
   await fight(page);
   expect(await finishBattle(page)).toBe('lose');
   await expect(page.locator('[data-testid=result]')).toBeVisible({ timeout: 15_000 });
 
-  await page.click('[data-testid=result-retry]');
+  await page.click('[data-testid=retry]');
   await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
+  await page.evaluate(() => (window as unknown as HookWindow).__echo.hold(true));
   let run = await currentRun(page);
   expect(run.matchIndex).toBe(6);
-  expect(run.records[6]?.attempts).toBe(2);
-  expect(run.levels).toEqual({ bulwark: 1 });
+  expect(run.attempts[6]).toBe(2);
+  expect(run.legion.map((p) => `${p.species}-${p.form}`)).toEqual(['bunny-1']);
 
   expect(await finishBattle(page)).toBe('lose');
   await expect(page.locator('[data-testid=result]')).toBeVisible({ timeout: 15_000 });
-  await page.click('[data-testid=result-adjust]');
-  await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  await page.click('[data-testid=retry-prep]');
+  await expect(page.locator('[data-testid=start-battle]')).toBeVisible();
   run = await currentRun(page);
   expect(run.inBattle).toBe(false);
   expect(run.matchIndex).toBe(6);
-  expect(run.levels).toEqual({ bulwark: 1 });
+  expect(run.legion.map((p) => `${p.species}-${p.form}`)).toEqual(['bunny-1']);
   await app.close();
   expect(errors).toEqual([]);
 });
@@ -148,20 +148,20 @@ test('输了可以原样重来或回去调整，已拿到的招式不丢', async
 test('设置在重开后保留', async () => {
   const first = await launchClient();
   const firstErrors = await ready(first.page);
-  await first.page.click('[data-testid=title-settings]');
-  const dialog = first.page.locator('[data-testid=settings]');
-  await expect(dialog.getByLabel('显示伤害数字')).toBeChecked();
-  await dialog.locator('label.toggle', { hasText: '显示伤害数字' }).click();
-  await expect(dialog.getByLabel('显示伤害数字')).not.toBeChecked();
+  await first.page.click('[data-testid=settings]');
+  const dialog = first.page.locator('[data-testid=settings-dialog]');
+  await expect(dialog.getByLabel('伤害数字')).toBeChecked();
+  await dialog.locator('label.toggle', { hasText: '伤害数字' }).click();
+  await expect(dialog.getByLabel('伤害数字')).not.toBeChecked();
   await expect.poll(() => readSave(first.userData)?.settings.damageNumbers).toBe(false);
   await first.app.close();
   expect(firstErrors).toEqual([]);
 
   const second = await launchClient({ userData: first.userData });
   const errors = await ready(second.page);
-  await second.page.click('[data-testid=title-settings]');
+  await second.page.click('[data-testid=settings]');
   await expect(
-    second.page.locator('[data-testid=settings]').getByLabel('显示伤害数字'),
+    second.page.locator('[data-testid=settings-dialog]').getByLabel('伤害数字'),
   ).not.toBeChecked();
   await second.app.close();
   expect(errors).toEqual([]);
@@ -170,15 +170,17 @@ test('设置在重开后保留', async () => {
 test('清除全部存档后回到第一次打开的状态，并留一份备份', async () => {
   const first = await launchClient();
   const firstErrors = await ready(first.page);
-  await first.page.click('[data-testid=start]');
-  await expect(first.page.locator('[data-testid=fight]')).toBeVisible();
+  await first.page.click('[data-testid=new-run]');
+  await first.page.click('[data-testid=depart]');
   await skipGuide(first.page);
   await expect.poll(() => readSave(first.userData)?.run?.matchIndex).toBe(0);
 
+  // 战前菜单 → 设置 → 清除全部存档
+  await first.page.keyboard.press('Escape');
   await first.page.getByRole('button', { name: '设置' }).click();
   await first.page.click('[data-testid=reset-all]');
-  await first.page.click('[data-testid=confirm-ok]');
-  await expect(first.page.locator('[data-testid=start]')).toBeVisible();
+  await first.page.click('[data-testid=confirm-reset]');
+  await expect(first.page.locator('[data-testid=new-run]')).toBeVisible();
   await expect(first.page.locator('[data-testid=continue]')).toHaveCount(0);
   expect(fs.existsSync(path.join(first.userData, 'save.backup.json'))).toBe(true);
   await first.app.close();
@@ -186,142 +188,111 @@ test('清除全部存档后回到第一次打开的状态，并留一份备份',
 
   const second = await launchClient({ userData: first.userData });
   const errors = await ready(second.page);
-  await expect(second.page.locator('[data-testid=start]')).toBeVisible();
+  await expect(second.page.locator('[data-testid=new-run]')).toBeVisible();
   await expect(second.page.locator('[data-testid=continue]')).toHaveCount(0);
   expect(readSave(second.userData)?.run ?? null).toBeNull();
+  // 学习进度也清掉了：新开一轮会再教
+  await second.page.click('[data-testid=new-run]');
+  await second.page.click('[data-testid=depart]');
+  await expect(second.page.locator('[data-testid=guide-title]')).toHaveText('先看对手');
   await second.app.close();
   expect(errors).toEqual([]);
 });
 
-test('战前换起手招式；战斗中空格暂停、失焦自动暂停，按 1 再点场地发动冲锋', async () => {
+test('战斗中空格暂停、点敌人设集火，窗口失焦自动暂停', async () => {
   const { app, page } = await launchClient({ hooks: true });
   const errors = await ready(page);
-  await page.click('[data-testid=start]');
-  await expect(page.locator('[data-testid=fight]')).toBeVisible();
+  await newRun(page);
   await skipGuide(page);
-  await page.click('[data-testid=starter-charge]');
-  await expect.poll(async () => (await currentRun(page)).levels).toEqual({ charge: 1 });
-  await fight(page);
-
+  await page.click('[data-testid=start-battle]');
+  const time = page.locator('[data-testid=time]');
   const banner = page.locator('[data-testid=banner]');
-  const timer = page.locator('[data-testid=timer]');
-  await page.evaluate(() => (window as unknown as HookWindow).__echo.fastForward(2));
+  await expect(time).not.toHaveText('0:00', { timeout: 10_000 });
+
   await page.keyboard.press('Space');
+  await expect(banner).toBeVisible();
   await expect(banner).toContainText('已暂停');
-  // 计时器在下一帧才刷新（没有显卡的 CI 虚拟机上一帧可能很慢），等它反映出快进的 2 秒。
-  await expect(timer).not.toHaveText('0:00');
-  const frozen = (await timer.textContent()) ?? '';
+  const frozen = (await time.textContent()) ?? '';
   await page.waitForTimeout(1500);
-  await expect(timer).toHaveText(frozen);
+  await expect(time).toHaveText(frozen);
+
+  // 暂停时画面不动：照着敌人在屏幕上的位置点它，设为集火
+  const units = await page.evaluate(() => (window as unknown as HookWindow).__echo.units());
+  const foe = units.find((u) => u.team === 1 && u.alive && u.screen);
+  if (!foe?.screen) throw new Error('找不到敌人的屏幕位置');
+  await page.mouse.click(foe.screen.x, (foe.screen.y + foe.screen.top) / 2);
+  await expect.poll(async () => (await state(page)).battle?.focusId).toBe(foe.id);
+  await expect(page.locator('[data-testid=focus]')).toContainText('集火');
+  await page.screenshot({ path: screenshotPath('flow-focus') });
+
   await page.keyboard.press('Space');
-  await expect(banner).toHaveCount(0);
-  await expect(timer).not.toHaveText(frozen, { timeout: 5_000 });
+  await expect(banner).toBeHidden();
+  await expect(time).not.toHaveText(frozen, { timeout: 5_000 });
 
-  const cooldown = page.locator('[data-testid=skill-guard] .cd-mask');
-  await expect(cooldown).toHaveText('');
-  await page.keyboard.press('1');
-  await expect(banner).toContainText('冲锋');
-  const box = await page.locator('[data-testid=arena]').boundingBox();
-  if (!box) throw new Error('找不到竞技场画布');
-  await page.mouse.click(box.x + box.width * 0.7, box.y + box.height * 0.5);
-  await expect(banner).toHaveCount(0);
-  await expect(cooldown).not.toHaveText('');
-  await page.screenshot({ path: screenshotPath('flow-charge') });
-
-  // 窗口失去焦点时自动暂停（设置里默认打开）。
+  // 窗口失去焦点时自动暂停（设置里默认打开），回到窗口后继续
   await page.evaluate(() => window.dispatchEvent(new Event('blur')));
   await expect(banner).toContainText('自动暂停');
+  await expect.poll(async () => (await state(page)).battle?.paused).toBe(true);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(banner).toBeHidden();
   await app.close();
   expect(errors).toEqual([]);
 });
 
-test('最后一场获胜后看到整轮结算，可以回到标题或再来一轮', async () => {
-  const { app, page } = await launchClient({ hooks: true });
-  const errors = await ready(page);
-  await setupRun(
-    page,
-    'volley',
-    [
-      ['reflect', 2],
-      ['ricochet', 2],
-      ['charge', 1],
-      ['mend', 1],
-    ],
-    6,
-  );
-  await fight(page);
-  expect(await finishBattle(page)).toBe('win');
-  await expect(page.locator('[data-testid=result-next]')).toContainText('整轮结算', {
-    timeout: 15_000,
-  });
-  await page.click('[data-testid=result-next]');
-  await expect(page.locator('[data-testid=summary]')).toBeVisible();
-  await page.screenshot({ path: screenshotPath('flow-summary'), animations: 'disabled' });
-
-  await page.click('[data-testid=summary-title]');
-  await expect(page.locator('[data-testid=start]')).toContainText('再来一轮');
-  await expect(page.locator('[data-testid=last-summary]')).toBeVisible();
-  await page.click('[data-testid=start]');
-  await expect(page.locator('[data-testid=fight]')).toBeVisible();
-  const run = await currentRun(page);
-  expect(run.matchIndex).toBe(0);
-  expect(run.phase).toBe('prep');
-  expect(run.levels).toEqual({ reflect: 1 });
-  await app.close();
-  expect(errors).toEqual([]);
-});
-
-test('战前调整：点槽位卸下、从招式库装回，拖动队员换开场位置', async () => {
+test('战前拖动宠物换开场位置，写进存档', async () => {
   const { app, page, userData } = await launchClient({ hooks: true });
   const errors = await ready(page);
-  await setupRun(
-    page,
-    'swarm',
-    [
-      ['reflect', 1],
-      ['ricochet', 1],
-      ['pierce', 1],
-      ['mend', 1],
-    ],
-    3,
-  );
-  const slinger = async () => (await currentRun(page)).loadout.slinger ?? [];
-  expect(await slinger()).toContain('pierce');
-
-  await page.locator('[data-testid^=slot-slinger-]', { hasText: '贯穿射' }).click();
-  await page.getByRole('button', { name: '卸下' }).click();
-  await expect(page.locator('[data-testid=lib-pierce]')).toBeVisible();
-  expect(await slinger()).not.toContain('pierce');
-  await page.click('[data-testid=lib-pierce]');
-  await page.getByRole('button', { name: '装到小弹的空槽' }).click();
-  await expect(page.locator('[data-testid=lib-pierce]')).toHaveCount(0);
-  expect(await slinger()).toContain('pierce');
-
-  // 竞技场坐标 → 屏幕坐标：画布四周各有 34 单位的木框，整体 1268×728。
-  const box = await page.locator('[data-testid=arena]').boundingBox();
-  if (!box) throw new Error('找不到竞技场画布');
-  const toScreen = (x: number, y: number) => ({
-    x: box.x + ((x + 34) / 1268) * box.width,
-    y: box.y + ((y + 34) / 728) * box.height,
-  });
-  const from = (await currentRun(page)).formation.units.guard;
-  if (!from) throw new Error('没有阿铁的站位');
-  const a = toScreen(from.x, from.y);
-  const b = toScreen(from.x - 60, 170);
+  await newRun(page);
+  await skipGuide(page);
+  const units = await page.evaluate(() => (window as unknown as HookWindow).__echo.units());
+  const pet = units.find((u) => u.team === 0 && u.uid && u.screen);
+  if (!pet?.screen) throw new Error('找不到我方宠物的屏幕位置');
+  const from = (await currentRun(page)).legion.find((p) => p.uid === pet.uid);
+  if (!from) throw new Error('军团里没有这只宠物');
+  const a = { x: pet.screen.x, y: (pet.screen.y + pet.screen.top) / 2 };
+  // 往屏幕下方拖：在场地上是往镜头这边挪
+  const down = from.y < 550;
+  const b = { x: a.x - 30, y: a.y + (down ? 150 : -150) };
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
   await page.mouse.move(b.x, b.y, { steps: 10 });
   await page.mouse.up();
   await expect
-    .poll(async () => Math.round((await currentRun(page)).formation.units.guard?.y ?? 0))
-    .toBeLessThan(from.y - 100);
+    .poll(async () => {
+      const p = (await currentRun(page)).legion.find((x) => x.uid === pet.uid);
+      return Math.abs((p?.y ?? from.y) - from.y);
+    })
+    .toBeGreaterThan(100);
+  const moved = (await currentRun(page)).legion.find((x) => x.uid === pet.uid);
+  expect(moved?.x ?? 999).toBeLessThanOrEqual(640);
   await page.screenshot({ path: screenshotPath('flow-prep-adjusted'), animations: 'disabled' });
 
   await fight(page);
-  await expect(page.locator('[data-testid=skill-slinger]')).toBeVisible();
   await app.close();
-  const save = readSave(userData);
-  expect(save?.run?.loadout.slinger).toContain('pierce');
-  expect(save?.run?.formation.units.guard?.y ?? 999).toBeLessThan(from.y - 100);
+  const saved = readSave(userData)?.run?.legion.find((p) => p.uid === pet.uid);
+  expect(saved?.x).toBeCloseTo(moved?.x ?? 0, 3);
+  expect(saved?.y).toBeCloseTo(moved?.y ?? 0, 3);
+  expect(errors).toEqual([]);
+});
+
+test('最后一场获胜后看到整轮结算，回到标题后记下通关', async () => {
+  const { app, page, userData } = await launchClient({ hooks: true });
+  const errors = await ready(page);
+  await newRun(page);
+  await skipGuide(page);
+  await patchRun(page, 6, ALL_STARS);
+  await fight(page);
+  expect(await finishBattle(page)).toBe('win');
+  await expect(page.locator('[data-testid=to-complete]')).toBeVisible({ timeout: 15_000 });
+  await page.click('[data-testid=to-complete]');
+  await expect(page.locator('[data-testid=complete]')).toBeVisible();
+  await page.screenshot({ path: screenshotPath('flow-complete'), animations: 'disabled' });
+
+  await page.click('[data-testid=close-run]');
+  await expect(page.locator('[data-testid=new-run]')).toBeVisible();
+  await expect(page.locator('[data-testid=continue]')).toHaveCount(0);
+  await expect.poll(() => readSave(userData)?.records.runsCompleted).toBe(1);
+  expect(readSave(userData)?.run ?? null).toBeNull();
+  await app.close();
   expect(errors).toEqual([]);
 });

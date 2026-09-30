@@ -7,6 +7,8 @@ import { blueprint, profileOf, type Lod } from '../models/index.js';
 import { TEAM_COLOR, TEAM_RIM, toWorld, type ViewUnit } from './types.js';
 
 const _v = new THREE.Vector3();
+/** 模型在战场上的放大倍数：场地很开阔，按真实比例看单位太小。 */
+export const VISUAL_SCALE = 1.28;
 
 /** 模型朝向（绕 y 轴）：模拟里的 facing 是 atan2(dy, dx)，模型正面朝 +z。 */
 export function yawOf(facing: number): number {
@@ -52,7 +54,8 @@ export class UnitView {
     attachExtras(this.model);
     this.model.setRim(TEAM_RIM[u.team], 0.6);
     this.animator = new Animator(this.model, profileOf(this.formId), u.id);
-    this.height = bp.height;
+    this.model.group.scale.setScalar(VISUAL_SCALE);
+    this.height = bp.height * VISUAL_SCALE;
     this.yaw = yawOf(u.facing);
     if (!ringGeo) ringGeo = new THREE.RingGeometry(0.82, 1, 40);
     const ringMat = new THREE.MeshBasicMaterial({
@@ -122,8 +125,17 @@ export class UnitView {
       state === 'attack' || state === 'cast' || state === 'ult' ? since : time - this.actStartLocal;
     if (state === 'dead') tIn = Math.max(0, now - u.diedAt);
     const speed = moving ? Math.hypot(u.x - u.px, u.y - u.py) * 0.6 : 0;
+    // 移动方向换到模型自己的坐标里（侧移、后撤步用）
+    let moveAngle = 0;
+    if (moving) {
+      const dx = u.x - u.px;
+      const dz = u.y - u.py;
+      const c = Math.cos(this.yaw);
+      const sn = Math.sin(this.yaw);
+      moveAngle = Math.atan2(dx * c - dz * sn, dx * sn + dz * c);
+    }
     this.animator.update(
-      { state, t: tIn, dur, speed, time },
+      { state, t: tIn, dur, speed, time, moveAngle },
       dt,
       this.model.group.position,
       this.yaw,

@@ -29,6 +29,11 @@ export interface AnimInput {
   dur: number;
   /** 移动速度（米/秒），用于步频。 */
   speed: number;
+  /**
+   * 移动方向相对身体正面的角度（弧度）：0 向前，正值偏向模型的 +x 一侧，±π 是后退。
+   * 侧移、后撤步时身体仍然朝着对手，脚下按这个方向走。
+   */
+  moveAngle?: number;
   /** 全局时间（秒）。 */
   time: number;
 }
@@ -248,14 +253,22 @@ export class Animator {
 
     switch (input.state) {
       case 'run': {
+        // 侧移：胯往移动方向转、胸口转回来对着对手；后撤：步子倒着迈，身子往后仰
+        const ma = input.moveAngle ?? 0;
+        const back = Math.abs(ma) > 2.1;
+        const turn = back
+          ? (ma > 0 ? ma - Math.PI : ma + Math.PI) * 0.5
+          : Math.max(-1.15, Math.min(1.15, ma)) * 0.85;
+        const dir = back ? -1 : 1;
         const f = (Math.min(1.4, 0.8 + input.speed * 0.35) * 2.2) / heft;
-        const p = (time + this.phase) * f * Math.PI * 2;
+        const p = dir * (time + this.phase) * f * Math.PI * 2;
         const s = Math.sin(p);
         const c = Math.cos(p);
-        spine.rx = 0.2;
+        const side = Math.abs(turn) / 1.15;
+        spine.rx = back ? -0.06 : 0.2 * (1 - side * 0.6);
         chest.rx = 0.05;
-        chest.ry = -0.18 * s;
-        hips.ry = 0.14 * s;
+        chest.ry = -turn - 0.18 * s;
+        hips.ry = turn + 0.14 * s;
         hips.py = -0.03 + 0.035 * Math.abs(c);
         tL.rx = -0.75 * s;
         tR.rx = 0.75 * s;
@@ -559,8 +572,13 @@ export class Animator {
 
     switch (input.state) {
       case 'run': {
+        const ma = input.moveAngle ?? 0;
+        const back = Math.abs(ma) > 2.1;
+        const turn = back ? 0 : Math.max(-1, Math.min(1, ma)) * 0.45;
         const f = (1.9 + input.speed * 0.5) / (this.profile.heft ?? 1);
-        const p = (time + this.phase) * f * Math.PI * 2;
+        const p = (back ? -1 : 1) * (time + this.phase) * f * Math.PI * 2;
+        body.ry = turn;
+        neck.ry = -turn * 0.7;
         body.py = 0.025 * Math.abs(Math.sin(p));
         body.rx = 0.08 * Math.sin(p * 2);
         head.rx = -0.12 * Math.sin(p * 2);

@@ -72,6 +72,10 @@ export class Shots {
       case 'bigfireball':
         sphere(0.2, 0xffb03a, 3.4, 2.2);
         break;
+      case 'breath':
+        // 龙息：一团团翻滚的火，靠拖尾的大火焰粒子连成一道火流
+        sphere(0.16, 0xffa030, 2.6, 2.6);
+        break;
       case 'bubble': {
         const m = new THREE.Mesh(
           this.geo('s', () => new THREE.SphereGeometry(1, 16, 12)),
@@ -202,9 +206,17 @@ export class Shots {
     switch (p.kind) {
       case 'fireball':
       case 'bigfireball':
+      case 'breath':
       case 'meteor':
       case 'phoenix': {
-        const big = p.kind === 'fireball' ? 1 : p.kind === 'bigfireball' ? 1.8 : 3;
+        const big =
+          p.kind === 'fireball'
+            ? 1
+            : p.kind === 'bigfireball'
+              ? 1.8
+              : p.kind === 'breath'
+                ? 2.4
+                : 3;
         particles.burst({
           count: Math.ceil(2 * big),
           at: mid,

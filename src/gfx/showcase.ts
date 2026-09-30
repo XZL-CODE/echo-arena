@@ -57,6 +57,17 @@ function nebula(
   return mesh;
 }
 
+/** 把角度 a 转向 b（最短方向），每次最多转 k 的比例。 */
+/** 展示时的正面朝向：略微侧向左上方的主光。 */
+const FRONT_YAW = 0.35;
+
+function turnToward(a: number, b: number, k: number): number {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * Math.min(1, k);
+}
+
 /** 发光圆台：石质台面 + 边缘金环 + 地面符文。 */
 function pedestal(): THREE.Group {
   const g = new THREE.Group();
@@ -98,10 +109,16 @@ export class Showcase {
     null;
   private pose: AnimState = 'idle';
   private poseT = 0;
-  /** 模型慢慢转动（图鉴查看）。 */
+  /**
+   * 模型左右慢慢摆动着展示（数值是摆动快慢，0 为不动）：以正面偏一点为中心来回转，
+   * 能看到侧面，但不会转到背面。
+   */
   spin = 0;
-  private yaw = 0.35;
+  private swayT = 0;
+  private yaw = FRONT_YAW;
   private focusHeight = 1;
+  private dark = false;
+  private shownId = '';
   private key: THREE.DirectionalLight;
 
   constructor() {
@@ -152,6 +169,12 @@ export class Showcase {
 
   /** 展示一只宠物（替换当前的）。 */
   show(formId: string, pose: AnimState = 'idle'): void {
+    // 同一只、同一个姿势就不重建（界面重绘时经常重复调用）
+    if (formId === this.shownId && this.model && !this.evolve) {
+      if (pose !== this.pose) this.setPose(pose);
+      return;
+    }
+    this.shownId = formId;
     this.drop(this.model);
     if (this.next) this.drop(this.next.model);
     this.next = null;
@@ -162,6 +185,17 @@ export class Showcase {
     this.pose = pose;
     this.poseT = 0;
     this.frame(s.model.blueprint.height);
+    if (this.dark) this.silhouette(true);
+  }
+
+  /** 只显示剪影（图鉴里还没见过的形态）：全身压成暗色，附加物（光环、火焰）藏起来。 */
+  silhouette(on: boolean): void {
+    this.dark = on;
+    const m = this.model;
+    if (!m) return;
+    m.setFlash(on ? 1 : 0, 0x0a0814);
+    for (const extra of m.extras) extra.object.visible = !on;
+    for (const face of m.faces) face.group.visible = !on;
   }
 
   setPose(pose: AnimState): void {
@@ -169,11 +203,37 @@ export class Showcase {
     this.poseT = 0;
   }
 
-  private frame(height: number): void {
+  /** 取景：按模型包围盒（高度和身长）定镜头距离；小个子也不会让展示台显得过大。 */
+  private frame(height: number, model: ModelInstance | null = this.model): void {
     this.focusHeight = height;
-    const h = Math.max(0.7, height);
-    this.camera.position.set(0, h * 0.62 + 0.2, h * 2.7 + 1.2);
-    this.camera.lookAt(0, h * 0.48, 0);
+    let wide = height * 0.6;
+    if (model) {
+      const box = new THREE.Box3().setFromBufferAttribute(
+        model.blueprint.body.getAttribute('position') as THREE.BufferAttribute,
+      );
+      const size = box.getSize(new THREE.Vector3());
+      wide = Math.max(size.x, size.z);
+    }
+    const h = Math.max(1, height, wide * 0.8);
+    const d = h * 3.4 * this.zoom;
+    this.camera.position.set(0, height * 0.5 + d * 0.2, d);
+    this.camera.lookAt(0, height * 0.46, 0);
+    this.stand.scale.setScalar(Math.min(1, Math.max(0.55, h * 0.62)));
+  }
+
+  /** 模型在画面里的偏移（占画面宽高的比例，正数向右、向下），给两边的界面面板让位置。 */
+  shift = { x: 0, y: 0 };
+  /** 镜头距离倍数（大于 1 拉远，模型显得小一些）。 */
+  private zoomK = 1;
+
+  get zoom(): number {
+    return this.zoomK;
+  }
+
+  set zoom(k: number) {
+    if (k === this.zoomK) return;
+    this.zoomK = k;
+    if (this.model) this.frame(this.model.blueprint.height);
   }
 
   /** 进化演出：from 当前在台上的形态，变成 toId。 */
@@ -199,7 +259,11 @@ export class Showcase {
     this.time += dt;
     this.poseT += dt;
     (this.sky.material as THREE.ShaderMaterial).uniforms.uTime.value = this.time;
-    this.yaw += this.spin * dt;
+    if (this.spin > 0 && !this.evolve) {
+      this.swayT += dt * this.spin;
+      const goal = FRONT_YAW + Math.sin(this.swayT * 1.7) * 0.5;
+      this.yaw = turnToward(this.yaw, goal, dt * 2.5);
+    }
     const drive = (m: ModelInstance, a: Animator, state: AnimState, t: number) => {
       m.group.rotation.y = this.yaw;
       a.update(
@@ -238,7 +302,7 @@ export class Showcase {
       const white = Math.min(1, Math.max(0, (t - 0.5) / 0.9));
       old.setFlash(white, 0xffffff);
       old.group.position.y = Math.max(0, (t - 0.6) * 0.25);
-      this.yaw += dt * (1 + white * 10);
+      if (t < 1.9) this.yaw += dt * (1 + white * 10);
       if (t > 0.9 && t - dt <= 0.9) {
         this.effects.pillar(new THREE.Vector3(), 0.9, 9, c, 2.4, 2.6);
         this.effects.circle(new THREE.Vector3(), 1.6, c, 3, 'hexa', 1.5);
@@ -275,12 +339,18 @@ export class Showcase {
       nm.group.scale.setScalar(Math.max(0.001, grow < 1 ? grow * 1.08 : 1));
       nm.setFlash(Math.max(0, 1 - Math.max(0, t - 1.9) / 0.8), 0xffffff);
       nm.group.position.y = Math.max(0, 0.35 - Math.max(0, t - 1.9) * 0.9);
-      this.frame(Math.max(old.blueprint.height * (1 - swapK), nm.blueprint.height * grow, 0.6));
+      this.frame(
+        Math.max(old.blueprint.height * (1 - swapK), nm.blueprint.height * grow, 0.6),
+        swapK < 0.5 ? old : nm,
+      );
+      // 换形之后慢慢转回正面
+      if (t > 1.9) this.yaw = turnToward(this.yaw, FRONT_YAW, dt * 3);
       drive(old, this.animator, 'idle', t);
       drive(nm, this.next.animator, t > 2.1 ? 'victory' : 'idle', Math.max(0, t - 2.1));
       if (t >= 4.2) {
         this.drop(old);
         this.model = nm;
+        this.shownId = '';
         this.animator = this.next.animator;
         this.next = null;
         this.evolve = null;
@@ -296,7 +366,12 @@ export class Showcase {
   }
 
   render(engine: Engine, dt: number): void {
-    this.camera.aspect = engine.width / Math.max(1, engine.height);
+    const w = engine.width;
+    const h = Math.max(1, engine.height);
+    this.camera.aspect = w / h;
+    if (this.shift.x !== 0 || this.shift.y !== 0) {
+      this.camera.setViewOffset(w, h, -this.shift.x * w, -this.shift.y * h, w, h);
+    } else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
     outlineShared.resolution.set(
       engine.width * engine.pixelRatio,

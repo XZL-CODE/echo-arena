@@ -1,132 +1,113 @@
-// 画面特效：激烈场面里各类特效都有上限，不会越积越多；打开“减少闪烁”后首领战照常进行。
+// 画面特效：十只人形态对首领的激烈场面里，粒子与各类立体特效都有上限，不会越积越多；
+// 打开“减少闪烁”、关掉特写后首领战照常打完。
 import { expect, test, type Page } from '@playwright/test';
-import { launchClient, ready, skipGuide } from './client';
+import {
+  fight,
+  launchClient,
+  newRun,
+  patchRun,
+  ready,
+  screenshotPath,
+  skipGuide,
+  type FxStats,
+  type HookWindow,
+} from './client';
 
-interface FxStats {
-  particles: number;
-  rings: number;
-  bolts: number;
-  lights: number;
-  decals: number;
-  texts: number;
-  quality: number;
-  drawMs: number;
-}
+/** 十只人形态：技能与大招最密的一支军团。 */
+const ALL_STARS = [
+  'fox',
+  'bird',
+  'otter',
+  'turtle',
+  'bunny',
+  'deer',
+  'cat',
+  'wolf',
+  'bear',
+  'lizard',
+].map((species) => ({ species, form: 3 }));
 
-interface Hooks {
-  fastForward(seconds: number): void;
-  hold(on: boolean): void;
-  mode(): string;
-  result(): 'win' | 'lose' | null;
-  cast(kind: 'guard' | 'slinger' | 'bell', x?: number, y?: number): boolean;
-  setupRun(encounterId: string, modules: Array<[string, number]>, matchIndex?: number): void;
-  fxStats(): FxStats;
-}
-type HookWindow = { __echo: Hooks };
+/** 粒子池与特效数量的上限（见 src/gfx/fx/particles.ts、effects.ts）。 */
+const MAX_PARTICLES = 3200 + 1920;
+const MAX_EFFECTS = 160;
 
-/** 冲锋、弹射、连爆、漩涡：连锁最多、特效最密的一套。 */
-const CHAIN_BUILD: Array<[string, number]> = [
-  ['charge', 2],
-  ['ricochet', 2],
-  ['burst', 2],
-  ['vortex', 2],
-];
-/** 能稳定打赢发条大王的一套（见平衡报告）。 */
-const KING_BUILD: Array<[string, number]> = [
-  ['reflect', 2],
-  ['ricochet', 2],
-  ['vortex', 1],
-  ['burst', 1],
-];
+// 首领战在没有显卡的机器上（软件渲染）一帧要画很久，给足时间
+test.setTimeout(300_000);
 
-async function setupRun(
-  page: Page,
-  encounterId: string,
-  build: Array<[string, number]>,
-  matchIndex: number,
-): Promise<void> {
-  await page.evaluate(
-    ([id, mods, index]) => (window as unknown as HookWindow).__echo.setupRun(id, mods, index),
-    [encounterId, build, matchIndex] as const,
-  );
-  await expect(page.locator('[data-testid=fight]')).toBeVisible();
-}
-
-/**
- * 开战。开战前就停住实时推进：整场战斗只靠快进推进（画面照常刷新），
- * 结果与机器快慢无关。
- */
-async function fight(page: Page): Promise<void> {
-  await page.evaluate(() => (window as unknown as HookWindow).__echo.hold(true));
-  await page.click('[data-testid=fight]');
-  await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
-}
-
-/** 一边放招式一边快进，直到分出胜负；返回胜负与过程中各类特效数量的峰值。 */
-async function playOut(page: Page): Promise<{ peak: FxStats; result: string }> {
+/** 一点点快进到分出胜负，隔几步让画面真正画几帧；返回胜负与各项数量的峰值（也记下拍到的特写）。 */
+async function playOut(page: Page): Promise<{ peak: FxStats; result: string; shots: Set<number> }> {
   const peak: FxStats = {
+    units: 0,
     particles: 0,
-    rings: 0,
-    bolts: 0,
-    lights: 0,
-    decals: 0,
-    texts: 0,
-    quality: 1,
+    effects: 0,
+    quality: 0,
     drawMs: 0,
+    fps: 0,
+    shot: 0,
+    shotUnit: 0,
   };
-  for (let i = 0; i < 400; i++) {
+  const shots = new Set<number>();
+  for (let i = 0; i < 600; i++) {
     const { stats, result } = await page.evaluate(() => {
       const echo = (window as unknown as HookWindow).__echo;
-      for (const kind of ['guard', 'slinger', 'bell'] as const) echo.cast(kind);
-      echo.fastForward(0.25);
-      return { stats: echo.fxStats(), result: echo.result() };
+      echo.fastForward(0.5);
+      return { stats: echo.fxStats(), result: echo.state().battle?.result ?? null };
     });
     for (const key of Object.keys(peak) as Array<keyof FxStats>) {
       peak[key] = Math.max(peak[key], stats[key]);
     }
-    // 隔几步让画面真正画几帧（持续特效、拖尾和泛光都在画的时候生成）。
-    if (i % 4 === 0) await page.waitForTimeout(40);
-    if (result) return { peak, result };
+    if (stats.shot) shots.add(stats.shot);
+    // 持续特效、拖尾和碎块都在画的时候推进
+    if (i % 2 === 0) await page.waitForTimeout(40);
+    if (result) return { peak, result, shots };
   }
-  throw new Error('战斗没有在 100 秒内结束');
+  throw new Error('战斗没有在 300 秒内结束');
 }
 
-test('激烈场面：爆炸、闪电、光照、焦痕都有上限，整场打完没有脚本错误', async () => {
+test('激烈场面：十只人形态对首领，粒子与特效都有上限，整场打完没有脚本错误', async () => {
   const { app, page } = await launchClient({ hooks: true });
   const errors = await ready(page);
-  await setupRun(page, 'swarm', CHAIN_BUILD, 3);
+  await newRun(page);
   await skipGuide(page);
+  await patchRun(page, 6, ALL_STARS);
   await fight(page);
-  const { peak } = await playOut(page);
+  const { peak, result, shots } = await playOut(page);
+  await page.screenshot({ path: screenshotPath('effects-boss') });
+  expect(result).toBe('win');
+  // 放技能时有特写，人形态放大招时有两段式大招镜头
+  expect([...shots].sort()).toEqual([1, 2]);
   // 确实打出了特效
-  expect(peak.particles).toBeGreaterThan(40);
-  expect(peak.decals).toBeGreaterThan(0);
+  expect(peak.units).toBeGreaterThanOrEqual(12);
+  expect(peak.particles).toBeGreaterThan(100);
+  expect(peak.effects).toBeGreaterThan(5);
   // 且都在上限之内
-  expect(peak.particles).toBeLessThanOrEqual(900);
-  expect(peak.rings).toBeLessThanOrEqual(91);
-  expect(peak.bolts).toBeLessThanOrEqual(61);
-  expect(peak.lights).toBeLessThanOrEqual(24);
-  expect(peak.decals).toBeLessThanOrEqual(28);
-  expect(peak.texts).toBeLessThanOrEqual(40);
+  expect(peak.particles).toBeLessThanOrEqual(MAX_PARTICLES);
+  expect(peak.effects).toBeLessThanOrEqual(MAX_EFFECTS);
   await app.close();
   expect(errors).toEqual([]);
 });
 
-test('打开“减少闪烁”：首领战（冲撞、召唤、倒下）照常打完', async () => {
+test('打开“减少闪烁”、关掉特写：首领战（喷火、变身、倒下）照常打完', async () => {
   const { app, page } = await launchClient({ hooks: true });
   const errors = await ready(page);
-  await page.click('[data-testid=title-settings]');
-  const dialog = page.locator('[data-testid=settings]');
+  await page.click('[data-testid=settings]');
+  const dialog = page.locator('[data-testid=settings-dialog]');
   await dialog.locator('label.toggle', { hasText: '减少闪烁' }).click();
   await expect(dialog.getByLabel('减少闪烁')).toBeChecked();
+  await dialog.locator('label.toggle', { hasText: '技能与大招特写' }).click();
+  await expect(dialog.getByLabel('技能与大招特写')).not.toBeChecked();
   await page.keyboard.press('Escape');
-  await setupRun(page, 'king', KING_BUILD, 6);
+  await newRun(page);
   await skipGuide(page);
+  await patchRun(page, 6, ALL_STARS);
   await fight(page);
-  const { peak, result } = await playOut(page);
+  const { peak, result, shots } = await playOut(page);
   expect(result).toBe('win');
-  expect(peak.particles).toBeGreaterThan(20);
-  expect(peak.particles).toBeLessThanOrEqual(900);
+  // 关掉特写后镜头不再推近
+  expect(shots.size).toBe(0);
+  expect(peak.particles).toBeGreaterThan(50);
+  expect(peak.particles).toBeLessThanOrEqual(MAX_PARTICLES);
+  expect(peak.effects).toBeLessThanOrEqual(MAX_EFFECTS);
   await app.close();
   expect(errors).toEqual([]);
 });
