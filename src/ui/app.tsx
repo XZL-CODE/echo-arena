@@ -150,6 +150,10 @@ export class App {
   private exposeTestHooks(): void {
     (window as unknown as { __echo: unknown }).__echo = {
       fastForward: (seconds: number) => this.arena.fastForward(seconds),
+      /** 停住实时推进，只让 fastForward 推进战斗（画面照常刷新）。 */
+      hold: (on: boolean) => {
+        this.arena.hold = on;
+      },
       mode: () => this.arena.mode,
       /** 特效数量与画一帧的平均耗时。 */
       fxStats: () => this.renderer.stats(),

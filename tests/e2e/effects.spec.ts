@@ -15,6 +15,7 @@ interface FxStats {
 
 interface Hooks {
   fastForward(seconds: number): void;
+  hold(on: boolean): void;
   mode(): string;
   result(): 'win' | 'lose' | null;
   cast(kind: 'guard' | 'slinger' | 'bell', x?: number, y?: number): boolean;
@@ -51,8 +52,12 @@ async function setupRun(
   await expect(page.locator('[data-testid=fight]')).toBeVisible();
 }
 
-/** 一边放招式一边快进，直到分出胜负；返回胜负与过程中各类特效数量的峰值。 */
+/**
+ * 一边放招式一边快进，直到分出胜负；返回胜负与过程中各类特效数量的峰值。
+ * 战斗只靠快进推进（画面照常刷新），结果与机器快慢无关。
+ */
 async function playOut(page: Page): Promise<{ peak: FxStats; result: string }> {
+  await page.evaluate(() => (window as unknown as HookWindow).__echo.hold(true));
   const peak: FxStats = {
     particles: 0,
     rings: 0,
