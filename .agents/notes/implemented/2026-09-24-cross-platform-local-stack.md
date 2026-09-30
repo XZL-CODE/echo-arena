@@ -45,6 +45,7 @@ Status: implemented
 - 2026-09-25 08:20 UTC：PR #1 合并到 main 后，CI 在公开仓库 XZL-CODE/echo-arena 发布 Release `v0.1.0`（macOS 通用 dmg、Windows 安装版与免安装版、SHA256SUMS.txt）。
 - 2026-09-27 07:49 UTC：PR #2 合并到 main 后，CI 发布 Release `v0.2.0`（同上四个文件）。
 - 2026-09-27 12:25 UTC：PR #4 合并到 main 后，CI 发布 Release `v0.3.0`（同上四个文件）。PR #3 合并后的那次 main 流水线因 macOS 打包的端到端测试失败而跳过了发布，由 PR #4 修复。
+- 2026-09-30 12:13 UTC：PR #6 合并到 main 后，CI 发布 Release `v0.4.0`（同上四个文件）。PR #5 合并后的那次 main 流水线因新加的特效端到端测试在 CI 机器上输掉首领战而跳过了发布，由 PR #6 修复。
 - 未验证：真实 Mac / Windows 电脑上的安装与首次打开（Gatekeeper、SmartScreen 提示）、Intel Mac 上的运行。
 
 ## Related materials
