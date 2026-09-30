@@ -39,6 +39,8 @@
       "dist/**/*",
       "!dist/**/*.map",
       "!dist/.build-stamp",
+      "!dist/lab.html",
+      "!dist/js/lab/**",
       "electron/**/*",
       "package.json"
     ],
@@ -110,9 +112,11 @@
   "devDependencies": {
     "@playwright/test": "1.56.1",
     "@types/node": "^22.10.0",
+    "@types/three": "0.186.0",
     "electron": "44.4.5",
     "electron-builder": "26.15.3",
     "prettier": "^3.8.1",
+    "three": "0.186.1",
     "typescript": "~6.0.3"
   }
 }

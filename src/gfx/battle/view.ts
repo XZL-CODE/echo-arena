@@ -1,0 +1,437 @@
+// 3D 战场的总调度：场景、镜头、单位、飞行物、特效导演、2D 叠加层与大招特写；
+// 把模拟状态画出来，并提供点选（集火）与地面拾取（战前摆站位）。
+import * as THREE from 'three';
+import { Engine, type QualityLevel } from '../engine.js';
+import { FxDirector, type FxEvent, type Stagehand } from '../fx/director.js';
+import { Effects } from '../fx/effects.js';
+import { Particles } from '../fx/particles.js';
+import { Shots } from '../fx/shots.js';
+import type { Lod } from '../models/index.js';
+import { outlineShared } from '../toon.js';
+import { CameraRig, type FrameBox } from './camera.js';
+import { CutIn } from './cutin.js';
+import { Hud, type HudUnit } from './hud.js';
+import { Stage, type StageTheme } from './stage.js';
+import { setFieldSize, toSim, toWorld, type ViewUnit, type ViewWorld } from './types.js';
+import { UnitView } from './unitview.js';
+
+export interface BattleViewSettings {
+  shake: boolean;
+  /** 减少闪烁：不闪白、光效减弱、闪电不抖。 */
+  gentle: boolean;
+  numbers: boolean;
+  /** 大招特写（横幅 + 镜头推近 + 慢动作）。 */
+  cinematics: boolean;
+}
+
+/** 大招特写横幅上显示的文字。 */
+export type UltNamer = (unit: ViewUnit) => { skill: string; name: string };
+
+const _v = new THREE.Vector3();
+const _ray = new THREE.Raycaster();
+const _plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+export class BattleView implements Stagehand {
+  readonly engine: Engine;
+  readonly scene = new THREE.Scene();
+  readonly rig = new CameraRig();
+  readonly particles = new Particles();
+  readonly effects = new Effects();
+  readonly shots = new Shots();
+  readonly hud = new Hud();
+  readonly cutin = new CutIn();
+  readonly director: FxDirector;
+  readonly overlay: HTMLElement;
+  private stage: Stage | null = null;
+  private views = new Map<number, UnitView>();
+  private world: ViewWorld | null = null;
+  private byId = new Map<number, ViewUnit>();
+  lod: Lod = 'lo';
+  settings: BattleViewSettings = { shake: true, gentle: false, numbers: true, cinematics: true };
+  namer: UltNamer = (u) => ({ skill: '奥义', name: `${u.species}` });
+  hoverId = 0;
+  private lastSkillCam = -99;
+  /** 镜头自动推近交战区域（战前摆站位时关掉，看全场）。 */
+  autoFrame = true;
+  private frameClock = 0;
+  private time = 0;
+  private slow = { scale: 1, left: 0 };
+  private stop = 0;
+  private screen = {
+    flash: 0,
+    flashColor: new THREE.Color(1, 1, 1),
+    aberration: 0,
+    radial: 0,
+    center: new THREE.Vector2(0.5, 0.5),
+    dim: 0,
+  };
+  private width = 1;
+  private height = 1;
+
+  constructor(canvas: HTMLCanvasElement, overlay: HTMLElement, quality?: QualityLevel) {
+    this.engine = new Engine(canvas, quality === undefined ? {} : { pinned: quality });
+    this.overlay = overlay;
+    overlay.appendChild(this.hud.canvas);
+    overlay.appendChild(this.cutin.root);
+    this.scene.add(this.particles.group, this.effects.group, this.shots.group);
+    this.director = new FxDirector(this);
+    this.setStage('meadow');
+  }
+
+  get gentle(): boolean {
+    return this.settings.gentle;
+  }
+
+  get camera(): THREE.PerspectiveCamera {
+    return this.rig.camera;
+  }
+
+  setStage(theme: StageTheme, rebuild = false): void {
+    if (this.stage?.theme === theme && !rebuild) return;
+    if (this.stage) {
+      this.scene.remove(this.stage.group);
+      this.stage.dispose();
+    }
+    this.stage = new Stage(theme, this.engine.quality);
+    this.stage.gentle = this.settings.gentle;
+    this.stage.applyTo(this.scene);
+  }
+
+  applySettings(s: Partial<BattleViewSettings>): void {
+    this.settings = { ...this.settings, ...s };
+    this.rig.shakeEnabled = this.settings.shake;
+    this.effects.gentle = this.settings.gentle;
+    this.cutin.gentle = this.settings.gentle;
+    if (this.stage) this.stage.gentle = this.settings.gentle;
+    this.cutin.enabled = this.settings.cinematics;
+    this.hud.showNumbers = this.settings.numbers;
+  }
+
+  resize(w: number, h: number): void {
+    this.width = w;
+    this.height = h;
+    this.engine.resize(w, h);
+    this.rig.fit(w / Math.max(1, h));
+    this.hud.resize(w, h, Math.min(2, window.devicePixelRatio || 1));
+  }
+
+  /** 清空场上单位与特效（换一场战斗、回到战前）。 */
+  reset(): void {
+    for (const v of this.views.values()) {
+      this.scene.remove(v.object);
+      v.dispose();
+    }
+    this.views.clear();
+    this.byId.clear();
+    this.particles.clear();
+    this.effects.clear();
+    this.shots.clear();
+    this.hud.clear();
+    this.cutin.hide();
+    this.slow = { scale: 1, left: 0 };
+    this.stop = 0;
+    this.world = null;
+    this.lastSkillCam = -99;
+    this.rig.frame(null);
+    this.rig.snap();
+  }
+
+  /** 模拟时间应当放慢的倍数（慢动作、命中停顿、大招特写）。 */
+  get timeScale(): number {
+    if (this.stop > 0) return 0.08;
+    return this.slow.left > 0 ? this.slow.scale : 1;
+  }
+
+  // ---------------------------------------------------------------- Stagehand
+
+  unit(id: number) {
+    const u = this.byId.get(id);
+    const v = this.views.get(id);
+    if (!u || !v) return null;
+    return { u, pos: v.world.clone().setY(v.lift), height: v.height, facing: u.facing };
+  }
+
+  shake(amount: number): void {
+    this.rig.shake(amount);
+  }
+
+  kick(amount: number): void {
+    this.rig.kick(amount);
+  }
+
+  flash(color: THREE.ColorRepresentation, amount: number): void {
+    if (this.settings.gentle) return;
+    this.screen.flashColor.set(color);
+    this.screen.flash = Math.max(this.screen.flash, amount);
+  }
+
+  aberration(amount: number): void {
+    if (this.settings.gentle) return;
+    this.screen.aberration = Math.max(this.screen.aberration, amount);
+  }
+
+  radial(at: THREE.Vector3, amount: number): void {
+    const p = at.clone().project(this.rig.camera);
+    this.screen.center.set(p.x * 0.5 + 0.5, p.y * 0.5 + 0.5);
+    this.screen.radial = Math.max(this.screen.radial, amount);
+  }
+
+  slowmo(scale: number, seconds: number): void {
+    this.slow = {
+      scale: Math.min(this.slow.left > 0 ? this.slow.scale : 1, scale),
+      left: Math.max(this.slow.left, seconds),
+    };
+  }
+
+  hitstop(seconds: number): void {
+    this.stop = Math.max(this.stop, seconds);
+  }
+
+  number(
+    at: THREE.Vector3,
+    text: string,
+    kind: 'damage' | 'heal' | 'crit' | 'echo' | 'counter' | 'shield',
+    team: number,
+  ): void {
+    this.hud.number(at, text, kind, team);
+  }
+
+  ult(unitId: number, target?: THREE.Vector3): void {
+    const u = this.byId.get(unitId);
+    const v = this.views.get(unitId);
+    if (!u || !v) return;
+    if (this.settings.cinematics) {
+      const names = this.namer(u);
+      this.cutin.show(v.formId, u.element, names.skill, names.name, u.team);
+      this.rig.ultShot(v.world.clone(), v.height, u.facing, target ?? null);
+      // 仰拍蓄力这一段几乎停住，切到侧面出手时恢复一些速度
+      this.slowmo(0.1, 1.1);
+      this.screen.dim = 1;
+      this.lastSkillCam = this.time + 1.5;
+    } else {
+      this.slowmo(0.5, 0.4);
+    }
+    this.radial(v.center(), 0.035);
+  }
+
+  skillCam(unitId: number, big: boolean): void {
+    if (!this.settings.cinematics || this.rig.inShot) return;
+    if (this.time - this.lastSkillCam < (big ? 2.6 : 3.6)) return;
+    const u = this.byId.get(unitId);
+    const v = this.views.get(unitId);
+    if (!u || !v || !u.alive) return;
+    // 自己一方、进化后的技能优先给镜头
+    if (u.team !== 0 && !big && Math.random() < 0.5) return;
+    this.lastSkillCam = this.time;
+    this.rig.skillShot(v.world.clone(), v.height, u.facing);
+    this.slowmo(0.5, 0.35);
+  }
+
+  // ---------------------------------------------------------------- 每帧
+
+  /** 按模拟状态同步单位与飞行物。alpha 是步间插值，now 是战斗时间。 */
+  sync(world: ViewWorld, alpha: number, dt: number): void {
+    // 场地尺寸变了：地形和取景都按新尺寸重来
+    if (world.width && world.height && setFieldSize(world.width, world.height)) {
+      if (this.stage) this.setStage(this.stage.theme, true);
+      this.rig.fit(this.width / Math.max(1, this.height));
+      this.rig.frame(null);
+      this.rig.snap();
+    }
+    this.world = world;
+    this.time += dt;
+    this.byId.clear();
+    for (const u of world.units) this.byId.set(u.id, u);
+    for (const u of world.units) {
+      let v = this.views.get(u.id);
+      if (!v) {
+        v = new UnitView(u, this.lod);
+        this.views.set(u.id, v);
+        this.scene.add(v.object);
+      }
+      v.update(u, alpha, world.t, dt, this.time);
+    }
+    for (const [id, v] of this.views) {
+      if (!this.byId.has(id) || v.gone) {
+        if (!this.byId.has(id) || v.gone) {
+          this.scene.remove(v.object);
+          v.dispose();
+          this.views.delete(id);
+        }
+      }
+    }
+    this.shots.sync(world.projectiles, alpha, dt, this.particles);
+    this.director.tick(world, dt);
+    // 镜头取景：每隔一小会儿按还活着的单位重新算一次交战区域
+    this.frameClock -= dt;
+    if (this.frameClock <= 0) {
+      this.frameClock = 0.25;
+      this.rig.frame(this.autoFrame ? this.actionBox() : null);
+    }
+  }
+
+  /**
+   * 交战区域：还活着的单位在地面上的包围盒。人多时去掉两头各一成的离群者（落在画外的由血条层标出方向），
+   * 免得一两个远程站在边上就把镜头拉到最远。
+   */
+  private actionBox(): FrameBox | null {
+    const xs: number[] = [];
+    const zs: number[] = [];
+    for (const v of this.views.values()) {
+      const u = this.byId.get(v.id);
+      if (!u || !u.alive) continue;
+      xs.push(v.world.x);
+      zs.push(v.world.z);
+    }
+    if (xs.length === 0) return null;
+    xs.sort((a, b) => a - b);
+    zs.sort((a, b) => a - b);
+    const cut = xs.length >= 8 ? Math.floor(xs.length * 0.1) : 0;
+    const lo = cut;
+    const hi = xs.length - 1 - cut;
+    return {
+      minX: (xs[lo] as number) - 0.4,
+      maxX: (xs[hi] as number) + 0.4,
+      minZ: (zs[lo] as number) - 0.4,
+      maxZ: (zs[hi] as number) + 0.4,
+    };
+  }
+
+  handle(events: readonly FxEvent[]): void {
+    this.director.handle(events);
+  }
+
+  /** 推进并渲染一帧。 */
+  render(dt: number): void {
+    this.tick(dt);
+    this.draw(dt);
+  }
+
+  /** 只推进镜头、粒子、特效与屏幕效果，不提交 GPU 渲染（快进时用）。 */
+  tick(dt: number): void {
+    this.slow.left = Math.max(0, this.slow.left - dt);
+    this.stop = Math.max(0, this.stop - dt);
+    this.rig.update(dt);
+    this.stage?.update(this.time);
+    this.particles.quality = this.engine.preset.particles;
+    this.particles.update(dt * (this.stop > 0 ? 0.2 : 1));
+    this.effects.update(dt * (this.stop > 0 ? 0.2 : 1));
+    this.cutin.update(dt);
+    // 屏幕效果衰减
+    const s = this.screen;
+    s.flash = Math.max(0, s.flash - dt * 3);
+    s.aberration = Math.max(0, s.aberration - dt * 0.03);
+    s.radial = Math.max(0, s.radial - dt * 0.05);
+    s.dim = Math.max(0, s.dim - dt * 1.1);
+    const g = this.engine.grade.uniforms;
+    g.uFlash.value.set(s.flashColor.r, s.flashColor.g, s.flashColor.b, s.flash);
+    g.uAberration.value = s.aberration;
+    g.uRadial.value = s.radial;
+    g.uCenter.value.copy(s.center);
+    g.uTint.value.set(0.42, 0.4, 0.55, s.dim * 0.5);
+    // 特写时血条、数字退到后面；近景里发光物占的画面大，泛光收一些
+    const fadeGoal = this.rig.inUltShot ? 1 : this.rig.inShot ? 0.55 : 0;
+    this.hud.fade += (fadeGoal - this.hud.fade) * (1 - Math.exp(-dt * 10));
+    const bloomGoal = this.rig.inShot ? 0.38 : 0.6;
+    this.engine.bloomStrength += (bloomGoal - this.engine.bloomStrength) * (1 - Math.exp(-dt * 6));
+  }
+
+  /** 提交渲染（3D 画面 + 2D 叠加层）。 */
+  draw(dt: number): void {
+    outlineShared.resolution.set(
+      this.width * this.engine.pixelRatio,
+      this.height * this.engine.pixelRatio,
+    );
+    outlineShared.width = 1.5 * this.engine.pixelRatio;
+    this.engine.render(this.scene, this.rig.camera, dt);
+    const list: HudUnit[] = [];
+    for (const v of this.views.values()) {
+      const u = this.byId.get(v.id);
+      if (u) list.push({ u, top: v.top, radius: u.radius });
+    }
+    this.hud.draw(list, this.rig.camera, this.world?.focusId ?? 0, this.hoverId, this.time, dt);
+  }
+
+  // ---------------------------------------------------------------- 拾取
+
+  private ndc(clientX: number, clientY: number): THREE.Vector2 {
+    const rect = this.engine.canvas.getBoundingClientRect();
+    return new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+  }
+
+  /** 点到的单位（按屏幕上离模型中心最近、在点击半径内的算）。 */
+  pick(clientX: number, clientY: number, team?: 0 | 1): number {
+    const rect = this.engine.canvas.getBoundingClientRect();
+    let best = 0;
+    let bestD = Infinity;
+    for (const v of this.views.values()) {
+      const u = this.byId.get(v.id);
+      if (!u || !u.alive || (team !== undefined && u.team !== team)) continue;
+      const c = v.center(_v).project(this.rig.camera);
+      const sx = (c.x * 0.5 + 0.5) * rect.width + rect.left;
+      const sy = (-c.y * 0.5 + 0.5) * rect.height + rect.top;
+      const top = v.top.clone().project(this.rig.camera);
+      const pxHeight = Math.abs((top.y - c.y) * 0.5 * rect.height) * 2;
+      const r = Math.max(22, pxHeight * 0.55);
+      const d = Math.hypot(clientX - sx, clientY - sy);
+      if (d < r && d < bestD) {
+        bestD = d;
+        best = v.id;
+      }
+    }
+    return best;
+  }
+
+  /** 屏幕点 → 模拟坐标（地面）。 */
+  groundAt(clientX: number, clientY: number): { x: number; y: number } | null {
+    _ray.setFromCamera(this.ndc(clientX, clientY), this.rig.camera);
+    const hit = _ray.ray.intersectPlane(_plane, new THREE.Vector3());
+    return hit ? toSim(hit) : null;
+  }
+
+  /** 模拟坐标（加高度，米）→ 屏幕坐标（相对画布，CSS 像素）。 */
+  screenOf(x: number, y: number, height = 0): { x: number; y: number } {
+    const p = toWorld(x, y, new THREE.Vector3()).setY(height).project(this.rig.camera);
+    return { x: (p.x * 0.5 + 0.5) * this.width, y: (-p.y * 0.5 + 0.5) * this.height };
+  }
+
+  /** 单位头顶的屏幕坐标（指引、提示用）。 */
+  unitScreen(id: number): { x: number; y: number; top: number } | null {
+    const v = this.views.get(id);
+    if (!v) return null;
+    const c = v.center(_v).project(this.rig.camera);
+    const t = v.top.clone().project(this.rig.camera);
+    return {
+      x: (c.x * 0.5 + 0.5) * this.width,
+      y: (-c.y * 0.5 + 0.5) * this.height,
+      top: (-t.y * 0.5 + 0.5) * this.height,
+    };
+  }
+
+  stats(): {
+    units: number;
+    particles: number;
+    effects: number;
+    quality: number;
+    drawMs: number;
+    fps: number;
+  } {
+    return {
+      units: this.views.size,
+      particles: this.particles.alive,
+      effects: this.effects.count,
+      quality: this.engine.quality,
+      drawMs: this.engine.drawMs,
+      fps: 1000 / Math.max(1, this.engine.frameEma),
+    };
+  }
+
+  dispose(): void {
+    this.reset();
+    this.stage?.dispose();
+    this.engine.dispose();
+  }
+}

@@ -7,6 +7,12 @@ const { createSaveStore } = require('./save-store.cjs');
 
 const DIST_DIR = path.join(__dirname, '..', 'dist');
 const DEV = process.env.ECHO_ARENA_DEV === '1';
+/** 开发用的模型样张页（不打进安装包）：值是样张页的查询参数。 */
+const LAB = process.env.ECHO_ARENA_LAB;
+
+// 画面用 WebGL2。电脑没有可用的显卡（或显卡驱动被 Chromium 停用）时，改用软件渲染兜底，
+// 慢一些但能正常显示；页面只加载本地文件，打开这个开关没有额外风险。
+app.commandLine.appendSwitch('enable-unsafe-swiftshader');
 
 // 存档目录固定为 macOS ~/Library/Application Support/EchoArena、
 // Windows %APPDATA%\EchoArena；测试时用 ECHO_ARENA_USER_DATA 指向临时目录。
@@ -67,7 +73,8 @@ function createWindow() {
 
   // 端到端测试时打开测试钩子（快进战斗等），正常运行不会带这个参数。
   const query = process.env.ECHO_ARENA_TEST === '1' ? '?test=1' : '';
-  mainWindow.loadURL(`app://game/index.html${query}`);
+  if (LAB !== undefined) mainWindow.loadURL(`app://game/lab.html?${LAB}`);
+  else mainWindow.loadURL(`app://game/index.html${query}`);
   if (DEV) watchForReload(mainWindow);
 }
 
