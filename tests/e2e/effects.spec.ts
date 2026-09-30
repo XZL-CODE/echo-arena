@@ -53,11 +53,17 @@ async function setupRun(
 }
 
 /**
- * 一边放招式一边快进，直到分出胜负；返回胜负与过程中各类特效数量的峰值。
- * 战斗只靠快进推进（画面照常刷新），结果与机器快慢无关。
+ * 开战。开战前就停住实时推进：整场战斗只靠快进推进（画面照常刷新），
+ * 结果与机器快慢无关。
  */
-async function playOut(page: Page): Promise<{ peak: FxStats; result: string }> {
+async function fight(page: Page): Promise<void> {
   await page.evaluate(() => (window as unknown as HookWindow).__echo.hold(true));
+  await page.click('[data-testid=fight]');
+  await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
+}
+
+/** 一边放招式一边快进，直到分出胜负；返回胜负与过程中各类特效数量的峰值。 */
+async function playOut(page: Page): Promise<{ peak: FxStats; result: string }> {
   const peak: FxStats = {
     particles: 0,
     rings: 0,
@@ -90,8 +96,7 @@ test('激烈场面：爆炸、闪电、光照、焦痕都有上限，整场打�
   const errors = await ready(page);
   await setupRun(page, 'swarm', CHAIN_BUILD, 3);
   await skipGuide(page);
-  await page.click('[data-testid=fight]');
-  await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
+  await fight(page);
   const { peak } = await playOut(page);
   // 确实打出了特效
   expect(peak.particles).toBeGreaterThan(40);
@@ -117,8 +122,7 @@ test('打开“减少闪烁”：首领战（冲撞、召唤、倒下）照常�
   await page.keyboard.press('Escape');
   await setupRun(page, 'king', KING_BUILD, 6);
   await skipGuide(page);
-  await page.click('[data-testid=fight]');
-  await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
+  await fight(page);
   const { peak, result } = await playOut(page);
   expect(result).toBe('win');
   expect(peak.particles).toBeGreaterThan(20);
