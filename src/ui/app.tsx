@@ -150,7 +150,26 @@ export class App {
   private exposeTestHooks(): void {
     (window as unknown as { __echo: unknown }).__echo = {
       fastForward: (seconds: number) => this.arena.fastForward(seconds),
+      /** 停住实时推进，只让 fastForward 推进战斗（画面照常刷新）。 */
+      hold: (on: boolean) => {
+        this.arena.hold = on;
+      },
       mode: () => this.arena.mode,
+      /** 特效数量与画一帧的平均耗时。 */
+      fxStats: () => this.renderer.stats(),
+      /** 固定画质（截图用），传 null 恢复自动。 */
+      pinQuality: (quality: number | null) => this.renderer.pinQuality(quality),
+      /** 场上还活着的单位（截图脚本用来找镜头位置）。 */
+      units: () =>
+        (this.arena.world?.units ?? [])
+          .filter((u) => u.alive)
+          .map((u) => ({ kind: u.kind, team: u.team, x: u.x, y: u.y, phase: u.phase })),
+      /** 竞技场坐标 → 页面坐标（CSS 像素）。 */
+      toScreen: (x: number, y: number) => {
+        const p = this.view.toCss(x, y);
+        const rect = this.canvas.getBoundingClientRect();
+        return { x: rect.left + p.x, y: rect.top + p.y };
+      },
       result: () => this.arena.world?.result ?? null,
       run: () => this.persistence.data.run,
       cast: (kind: 'guard' | 'slinger' | 'bell', x?: number, y?: number) => {
@@ -331,7 +350,7 @@ export class App {
           '减少闪烁',
           s.reduceFlashes,
           (v) => this.updateSettings((x) => void (x.reduceFlashes = v)),
-          '减弱受击闪白与光环',
+          '去掉受击闪白与闪电抖动，光效减弱',
         ),
         toggle('显示伤害数字', s.damageNumbers, (v) =>
           this.updateSettings((x) => void (x.damageNumbers = v)),

@@ -40,6 +40,8 @@ export class ArenaController {
   targeting: PlayerUnitKind | null = null;
   looks: Looks = { shield: false, armor: false, booster: false, bellCharm: 'bow' };
   reduceFlashes = false;
+  /** 测试用：画面照常刷新，但战斗时间只靠 fastForward 推进，结果与机器快慢无关。 */
+  hold = false;
   selected: PlayerUnitKind | null = null;
   hoverEnemyId = 0;
   private hoverUnitId = 0;
@@ -164,7 +166,7 @@ export class ArenaController {
       this.advance(world, dt, 1);
       if (world.result && world.t - world.resultTime > 2.5) this.demoStep?.(world);
     } else if (this.mode === 'battle' || this.mode === 'ended') {
-      if (!this.paused) {
+      if (!this.paused && !this.hold) {
         let scale = this.speed;
         if (this.targeting) scale *= 0.3;
         if (this.renderer.fx.hitstop > 0) scale *= 0.25;
@@ -210,7 +212,7 @@ export class ArenaController {
     for (const e of events) {
       if (e.type === 'spawn') this.renderer.markSpawn(e.unitId, world.t);
     }
-    this.renderer.fx.handle(events, (id) => world.unitById(id)?.kind);
+    this.renderer.fx.handle(events, (id) => world.unitById(id));
     this.hooks.onEvents?.(events, world);
   }
 

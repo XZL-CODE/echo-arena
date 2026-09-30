@@ -59,25 +59,3 @@ export function starPath(
   }
   ctx.closePath();
 }
-
-/** 齿轮（发条大王的弹幕、装饰）。 */
-export function gearPath(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  r: number,
-  teeth: number,
-  rotation = 0,
-): void {
-  ctx.beginPath();
-  const inner = r * 0.74;
-  for (let i = 0; i < teeth * 4; i++) {
-    const a = rotation + (i / (teeth * 4)) * Math.PI * 2;
-    const rr = i % 4 < 2 ? r : inner;
-    const px = x + Math.cos(a) * rr;
-    const py = y + Math.sin(a) * rr;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-}
