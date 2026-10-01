@@ -68,6 +68,9 @@ export async function launchClient(options: LaunchOptions = {}): Promise<Client>
     ? await electron.launch({ executablePath: resolveExecutable(target), env })
     : await electron.launch({ args: [ROOT], env });
   const page = await app.firstWindow();
+  // 没有显卡的机器（CI）用软件渲染，首领战一帧要画一秒以上，一次点击要等好几帧才生效，
+  // 默认 30 秒的操作时限不够
+  page.setDefaultTimeout(90_000);
   return { app, page, userData: dir };
 }
 

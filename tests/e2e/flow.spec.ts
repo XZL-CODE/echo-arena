@@ -32,6 +32,9 @@ const ALL_STARS = [
   'lizard',
 ].map((species) => ({ species, form: 3 }));
 
+// 有两项要打最后一场的首领战；没有显卡的机器上（软件渲染）一帧要画很久，给足时间
+test.setTimeout(240_000);
+
 async function currentRun(page: Page) {
   const run = (await state(page)).run;
   if (!run) throw new Error('没有进行中的一轮');
