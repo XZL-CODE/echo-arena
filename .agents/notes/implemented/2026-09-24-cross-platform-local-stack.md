@@ -23,7 +23,7 @@ Status: implemented
 ## Plan
 
 - 以 Electron 桌面客户端交付（用户 2026-09-24 追加要求“我想要客户端”）。主进程只负责窗口、`app://` 本地资源协议和存档读写；页面在上下文隔离加沙盒中运行，只通过预加载脚本拿到存档与窗口接口。
-- 游戏本体仍用 TypeScript（纯 JS 实现的 6.x 编译器）直接编译成原生 ES 模块：Canvas 2D 画战场，Web Audio 合成声音，界面用原生 DOM 加自写的 JSX 工厂，运行时没有第三方依赖。Electron 自带的 Chromium 保证两个平台画面和声音一致。
+- 游戏本体仍用 TypeScript（纯 JS 实现的 6.x 编译器）直接编译成原生 ES 模块：three.js（WebGL2）画 3D 战场与展示台（2026-09-30 起，取代 Canvas 2D，见 [三维宠物军团改版](2026-09-30-3d-pet-legion.md)），Web Audio 合成声音，界面用原生 DOM 加自写的 JSX 工厂。运行时唯一的第三方库是 three.js：构建时把用到的文件拷进 `dist/vendor`，页面用 import map 指向本地文件，import map 的哈希写进内容安全策略（算哈希前先把换行统一成 `\n`）。没有可用显卡时由 Chromium 的软件渲染兜底（主进程打开 `enable-unsafe-swiftshader`）。Electron 自带的 Chromium 保证两个平台画面和声音一致。
 - 从源码运行：`npm start` 或双击启动脚本。首次自动安装依赖、下载 Electron（官方源失败时改用 npmmirror 镜像）并构建，然后打开游戏窗口。要求 Node.js 22.12 以上（Electron 44 安装工具的要求）。启动脚本的 `--check` 只做准备、不开窗口，供 CI 验证。
 - 打包用 electron-builder：macOS 出 Intel 与 Apple 芯片通用的 dmg，只做 ad-hoc 签名、不公证；Windows 出 NSIS 安装包和免安装版，不签名。GitHub Actions（用户同意用 CI 打包，并已把仓库设为公开）在 macOS 与 Windows 机器上打包，再对打包好的客户端跑全部端到端测试；同时在两个平台上从全新检出执行启动脚本并用源码版跑冒烟测试；合并到默认分支（版本号取 `package.json`，已发布过就跳过）、推送 `v*` 标签或手动运行并填写版本号时，在测试通过后发布 Release。
 - 取舍：Electron 体积大（安装包 100 MB 以上），换来两个平台一致的渲染与音频和成熟的打包链。Tauri 需要 Rust 工具链，且 macOS 上是 Safari 内核，没有采用。
@@ -46,7 +46,8 @@ Status: implemented
 - 2026-09-27 07:49 UTC：PR #2 合并到 main 后，CI 发布 Release `v0.2.0`（同上四个文件）。
 - 2026-09-27 12:25 UTC：PR #4 合并到 main 后，CI 发布 Release `v0.3.0`（同上四个文件）。PR #3 合并后的那次 main 流水线因 macOS 打包的端到端测试失败而跳过了发布，由 PR #4 修复。
 - 2026-09-30 12:13 UTC：PR #6 合并到 main 后，CI 发布 Release `v0.4.0`（同上四个文件）。PR #5 合并后的那次 main 流水线因新加的特效端到端测试在 CI 机器上输掉首领战而跳过了发布，由 PR #6 修复。
-- 未验证：真实 Mac / Windows 电脑上的安装与首次打开（Gatekeeper、SmartScreen 提示）、Intel Mac 上的运行。
+- 2026-09-30 换成 three.js 后，Windows 上打包版与源码版都停在启动：Windows 检出的 `index.html` 是 `\r\n` 换行，构建按原始内容算 import map 的哈希，浏览器却按统一成 `\n` 后的内容校验，import map 被内容安全策略拦下，three.js 加载不到。构建改为先统一换行再算哈希后，CI 的 Windows 打包、打包后端到端测试与源码版冒烟测试都通过。
+- 未验证：真实 Mac / Windows 电脑上的安装与首次打开（Gatekeeper、SmartScreen 提示）、Intel Mac 上的运行、有显卡的真机上的 3D 帧率。
 
 ## Related materials
 
