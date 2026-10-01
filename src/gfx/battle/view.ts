@@ -376,6 +376,26 @@ export class BattleView implements Stagehand {
     return d < r ? (1 - d / r) * (1.6 - t) : 0;
   }
 
+  /**
+   * 大招特写里比主角离镜头近、又在画面里的单位。大招镜头压得低、推得近，旁边的宠物
+   * 在画面边上是一大团背光的暗影；这一段只留主角和后面的战场。技能特写不这样做，
+   * 免得单位隔几秒就消失又出现。
+   */
+  private foreground(v: UnitView, eye: THREE.Vector3, aim: THREE.Vector3): boolean {
+    _seg.copy(aim).sub(eye);
+    const far = _seg.length();
+    _seg.divideScalar(Math.max(1e-6, far));
+    const depth = _rel.copy(v.center(_c)).sub(eye).dot(_seg);
+    if (depth <= 0 || depth > far - 0.4) return false;
+    // 偏离视线的角度不超过半个视角（按宽的那一边）加上它自己的张角，就在画面里
+    const cam = this.rig.camera;
+    const half = Math.atan(
+      Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.max(1, cam.aspect),
+    );
+    const off = Math.acos(Math.min(1, depth / Math.max(1e-6, _rel.length())));
+    return off < half + Math.atan(v.height / depth);
+  }
+
   /** 特写时把挡在镜头和主角之间、或者贴着镜头的单位藏起来；镜头拉回后全部恢复。 */
   private cullForShot(): void {
     const subject = this.rig.inShot ? this.views.get(this.shotUnit) : undefined;
@@ -390,9 +410,10 @@ export class BattleView implements Stagehand {
     }
     const eye = this.rig.camera.position;
     const aim = subject.center(_aim);
+    const ult = this.rig.inUltShot;
     for (const v of this.views.values()) {
       if (v === subject || v.gone) continue;
-      const hide = this.blocking(v, eye, aim) > 0;
+      const hide = this.blocking(v, eye, aim) > 0 || (ult && this.foreground(v, eye, aim));
       if (hide === this.hidden.has(v.id)) continue;
       v.object.visible = !hide;
       if (hide) this.hidden.add(v.id);
