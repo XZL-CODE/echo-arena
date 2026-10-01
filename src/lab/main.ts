@@ -114,6 +114,7 @@ function main(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;
     engine.resize(w, h);
+    engine.prepare();
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     outlineShared.resolution.set(w * engine.pixelRatio, h * engine.pixelRatio);

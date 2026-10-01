@@ -114,11 +114,14 @@ export class Effects {
   /** 减少闪烁：光效强度打折，不做闪白。 */
   gentle = false;
 
-  constructor(lightCount = 6) {
+  /**
+   * 光源池的灯一直挂在场景里，不用时亮度为 0：场上的灯数一变，所有受光材质都要换着色器
+   * （第一次还要现编译），画面会卡一下。
+   */
+  constructor(lightCount = 3) {
     this.group.add(this.debris.group);
     for (let i = 0; i < lightCount; i++) {
       const l = new THREE.PointLight(0xffffff, 0, 6, 1.6);
-      l.visible = false;
       this.lights.push(l);
       this.lightLife.push(0);
       this.lightMax.push(0);
@@ -215,11 +218,10 @@ export class Effects {
     }
     for (let i = 0; i < this.lights.length; i++) {
       const l = this.lights[i] as THREE.PointLight;
-      if (!l.visible) continue;
+      if ((this.lightLife[i] as number) <= 0) continue;
       this.lightLife[i] = (this.lightLife[i] as number) - dt;
       const k = Math.max(0, (this.lightLife[i] as number) / (this.lightDur[i] as number));
       l.intensity = (this.lightMax[i] as number) * k * k;
-      if (k <= 0) l.visible = false;
     }
   }
 
@@ -231,7 +233,10 @@ export class Effects {
       e.dispose();
     }
     this.live = [];
-    for (const l of this.lights) l.visible = false;
+    for (let i = 0; i < this.lights.length; i++) {
+      (this.lights[i] as THREE.PointLight).intensity = 0;
+      this.lightLife[i] = 0;
+    }
   }
 
   /** 一闪而过的点光源（从光源池里取最旧的一个）。 */
@@ -245,16 +250,13 @@ export class Effects {
     let idx = 0;
     let least = Infinity;
     for (let i = 0; i < this.lights.length; i++) {
-      const left = (this.lights[i] as THREE.PointLight).visible
-        ? (this.lightLife[i] as number)
-        : -1;
+      const left = this.lightLife[i] as number;
       if (left < least) {
         least = left;
         idx = i;
       }
     }
     const l = this.lights[idx] as THREE.PointLight;
-    l.visible = true;
     l.position.copy(at);
     l.color.set(color);
     l.distance = distance;

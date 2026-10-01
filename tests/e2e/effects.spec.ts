@@ -43,6 +43,7 @@ async function playOut(page: Page): Promise<{ peak: FxStats; result: string; sho
     quality: 0,
     drawMs: 0,
     fps: 0,
+    frames: 0,
     shot: 0,
     shotUnit: 0,
   };

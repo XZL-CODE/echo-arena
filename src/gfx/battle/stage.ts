@@ -1015,18 +1015,18 @@ export class Stage {
         const k = r() * 10;
         this.animated.push((t) => (m.position.y = y0 + Math.sin(t * 0.5 + k) * 0.3));
       }
-      // 远处的闪电：每隔几秒天色一亮
-      let next = 3;
+      // 远处的闪电：隔十几秒天色微微一亮（太勤、太亮就成了整场一闪一闪）
+      let next = 6;
       let flash = 0;
       const hemi = this.lights.hemi;
       const base = hemi.intensity;
       this.animated.push((t, dt) => {
         if (t > next) {
-          next = t + 4 + r() * 6;
+          next = t + 10 + r() * 8;
           if (!this.gentle) flash = 1;
         }
         flash = Math.max(0, flash - dt * 5);
-        hemi.intensity = base + flash * flash * 1.4;
+        hemi.intensity = base + flash * flash * 0.7;
       });
     } else if (theme === 'canyon') {
       // 平顶岩柱与岩塔

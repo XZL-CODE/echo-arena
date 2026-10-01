@@ -27,7 +27,7 @@ const CSS = `
 @keyframes cutin-in { 0% { transform: skewY(-6deg) translateX(-110%); } 16% { transform: skewY(-6deg) translateX(0); } 80% { transform: skewY(-6deg) translateX(3%); opacity:1; } 100% { transform: skewY(-6deg) translateX(110%); opacity:0; } }
 @keyframes cutin-in-r { 0% { transform: skewY(6deg) translateX(110%); } 16% { transform: skewY(6deg) translateX(0); } 80% { transform: skewY(6deg) translateX(-3%); opacity:1; } 100% { transform: skewY(6deg) translateX(-110%); opacity:0; } }
 @keyframes cutin-lines { from { background-position: 0 0; } to { background-position: -90px 0; } }
-@keyframes cutin-flash { 0% { opacity:0; } 14% { opacity:0.9; } 40% { opacity:0; } 100% { opacity:0; } }
+@keyframes cutin-flash { 0% { opacity:0; } 14% { opacity:0.55; } 40% { opacity:0; } 100% { opacity:0; } }
 `;
 
 const PALETTE: Record<string, [string, string, string]> = {

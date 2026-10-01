@@ -130,7 +130,10 @@ export class App {
   /** 教学战：不写进存档。 */
   private practice = false;
   private practiceRun: RunState | null = null;
+  /** 上一次真正画的时刻、上一次屏幕刷新的时刻，以及攒下来还没画的时间（毫秒，见 loop）。 */
   private last = 0;
+  private lastTick = 0;
+  private frameBudget = 0;
   private modalClose: (() => void) | null = null;
   private hud: HudRefs | null = null;
   private resultInfo: ResultInfo | null = null;
@@ -224,6 +227,17 @@ export class App {
   // ------------------------------------------------------------------ 主循环
 
   private loop = (now: number): void => {
+    requestAnimationFrame(this.loop);
+    // 战斗进行中与进化演出最多 60 帧，菜单、战前、暂停时 30 帧就够：不跟着高刷新率屏幕把显卡跑满。
+    // 按攒下的时间决定这一次刷新画不画（144 赫兹的屏幕上平均也接近 60 帧）。
+    const smooth = (this.screen === 'battle' && !this.battle.paused) || this.screen === 'evolve';
+    const target = smooth ? 1000 / 60 : 1000 / 30;
+    this.view.engine.measure = this.screen === 'battle' && !this.battle.paused;
+    const since = this.lastTick ? now - this.lastTick : target;
+    this.lastTick = now;
+    this.frameBudget = Math.min(this.frameBudget + since, target * 2);
+    if (this.frameBudget < target - 1) return;
+    this.frameBudget -= target;
     const wall = this.last ? Math.min(0.5, (now - this.last) / 1000) : 1 / 60;
     const dt = Math.min(0.1, wall);
     this.last = now;
@@ -235,7 +249,6 @@ export class App {
       this.showcase.update(dt);
       this.showcase.render(this.view.engine, dt);
     }
-    requestAnimationFrame(this.loop);
   };
 
   private resize(): void {

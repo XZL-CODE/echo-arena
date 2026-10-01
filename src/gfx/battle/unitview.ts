@@ -7,8 +7,26 @@ import { blueprint, profileOf, type Lod } from '../models/index.js';
 import { TEAM_COLOR, TEAM_RIM, toWorld, type ViewUnit } from './types.js';
 
 const _v = new THREE.Vector3();
+const _local = new THREE.Vector3();
+const _box = new THREE.Box3();
+const UP = new THREE.Vector3(0, 1, 0);
 /** 模型在战场上的放大倍数：场地很开阔，按真实比例看单位太小。 */
 export const VISUAL_SCALE = 1.28;
+
+/** 各形态模型在自身坐标里的包围盒（绑定姿势，含放大倍数），同一形态只算一次。 */
+const boundsCache = new Map<string, THREE.Box3>();
+
+function localBounds(group: THREE.Object3D): THREE.Box3 {
+  group.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  group.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+    box.union(_box.copy(mesh.geometry.boundingBox as THREE.Box3).applyMatrix4(mesh.matrixWorld));
+  });
+  return box;
+}
 
 /** 模型朝向（绕 y 轴）：模拟里的 facing 是 atan2(dy, dx)，模型正面朝 +z。 */
 export function yawOf(facing: number): number {
@@ -32,9 +50,11 @@ export class UnitView {
   readonly animator: Animator;
   readonly ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   readonly height: number;
+  /** 模型在自身坐标里的包围盒：烛龙伸开的翅膀比身体宽得多，按高度估不出它会不会贴着镜头。 */
+  readonly bounds: THREE.Box3;
   private yaw: number;
-  private lastHitAt = -9;
   private flash = 0;
+  private flashCooldown = 0;
   private deadSince = -1;
   private removed = false;
   /** 头顶在世界里的位置（血条、伤害数字用）。 */
@@ -56,6 +76,12 @@ export class UnitView {
     this.animator = new Animator(this.model, profileOf(this.formId), u.id);
     this.model.group.scale.setScalar(VISUAL_SCALE);
     this.height = bp.height * VISUAL_SCALE;
+    let bounds = boundsCache.get(this.formId);
+    if (!bounds) {
+      bounds = localBounds(this.model.group);
+      boundsCache.set(this.formId, bounds);
+    }
+    this.bounds = bounds;
     this.yaw = yawOf(u.facing);
     if (!ringGeo) ringGeo = new THREE.RingGeometry(0.82, 1, 40);
     const ringMat = new THREE.MeshBasicMaterial({
@@ -142,13 +168,10 @@ export class UnitView {
     );
     for (const face of this.model.faces) face.set(this.animator.expression);
 
-    // 受击闪白（0.1 秒）
-    if (u.hitAt > this.lastHitAt + 1e-6) {
-      this.lastHitAt = u.hitAt;
-      this.flash = 1;
-    }
+    // 受击闪白（约 0.1 秒，见 hit）
+    this.flashCooldown = Math.max(0, this.flashCooldown - dt);
     this.flash = Math.max(0, this.flash - dt * 9);
-    this.model.setFlash(this.flash * 0.75, 0xffffff);
+    this.model.setFlash(this.flash * 0.6, 0xffffff);
 
     // 持续状态的染色：灼烧橙红脉动、石肤灰、定身绿、眩晕黄
     if (u.burn > 0) this.model.setTint(0.35 + 0.15 * Math.sin(time * 14), 0xff7a3a);
@@ -180,6 +203,23 @@ export class UnitView {
 
   center(out = _v): THREE.Vector3 {
     return out.set(this.world.x, this.lift + this.height * 0.5, this.world.z);
+  }
+
+  /** 镜头离模型有多近（米，到包围盒表面；在盒子里是 0）。 */
+  clearance(eye: THREE.Vector3): number {
+    // 换到模型自己的坐标里：模型只绕竖直轴转，包围盒已含放大倍数
+    _local.copy(eye).sub(this.model.group.position).applyAxisAngle(UP, -this.yaw);
+    return this.bounds.distanceToPoint(_local);
+  }
+
+  /**
+   * 挨打闪白一下。同一只 0.5 秒内最多闪一次：混战里一只宠物每秒要挨好几下，下下都闪就成了频闪。
+   * 持续伤害不闪（导演只在直接命中时调用）；strong 是克制、高等级回响或击倒，闪得亮一些。
+   */
+  hit(strong: boolean): void {
+    if (this.flashCooldown > 0) return;
+    this.flash = strong ? 1 : 0.7;
+    this.flashCooldown = 0.5;
   }
 
   dispose(): void {

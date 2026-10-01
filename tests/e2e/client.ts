@@ -155,6 +155,8 @@ export interface FxStats {
   quality: number;
   drawMs: number;
   fps: number;
+  /** 累计画了多少帧。 */
+  frames: number;
   /** 正在拍的特写：0 没有，1 技能特写，2 大招特写。 */
   shot: number;
   shotUnit: number;

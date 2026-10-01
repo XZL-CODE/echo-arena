@@ -108,34 +108,53 @@ export interface EngineOptions {
   pinned?: QualityLevel;
 }
 
-/** 帧耗时的指数平均，用于自动升降画质。 */
+/** 自动调节最高只升到这一档（中）；更高的档要在设置里选。 */
+const AUTO_MAX: QualityLevel = 2;
+
+/**
+ * 帧间隔的指数平均，用于自动升降画质。主循环在战斗里按 60 帧的节奏画，所以“够快”是稳定跟上
+ * 60 帧：持续跟不上就降一档，稳定跟上 20 秒才升回一档。刚升档不久又撑不住，说明正卡在临界上，
+ * 这次就不再自动升档，免得来回切换。
+ */
 class Governor {
-  ema = 16;
+  ema = 16.7;
   private slow = 0;
-  private fast = 0;
+  private good = 0;
+  private sinceRaise = Infinity;
+  private locked = false;
 
   /** 返回 -1 降档、+1 升档、0 不变。 */
   sample(ms: number, dt: number): -1 | 0 | 1 {
     this.ema += (Math.min(ms, 100) - this.ema) * 0.08;
+    this.sinceRaise += dt;
     if (this.ema > 24) {
       this.slow += dt;
-      this.fast = 0;
-    } else if (this.ema < 14.5) {
-      this.fast += dt;
+      this.good = 0;
+    } else if (this.ema < 18.5) {
+      this.good += dt;
       this.slow = 0;
     } else {
       this.slow = Math.max(0, this.slow - dt);
-      this.fast = Math.max(0, this.fast - dt);
+      this.good = Math.max(0, this.good - dt);
     }
     if (this.slow > 1.8) {
       this.slow = 0;
+      if (this.sinceRaise < 20) this.locked = true;
       return -1;
     }
-    if (this.fast > 6) {
-      this.fast = 0;
+    if (this.good > 20 && !this.locked) {
+      this.good = 0;
+      this.sinceRaise = 0;
       return 1;
     }
     return 0;
+  }
+
+  /** 重新开始计时（刚开始按 60 帧的节奏画，之前的空档不算）。 */
+  restart(): void {
+    this.ema = 16.7;
+    this.slow = 0;
+    this.good = 0;
   }
 }
 
@@ -158,8 +177,15 @@ export class Engine {
   private target: THREE.WebGLRenderTarget;
   private governor = new Governor();
   private lastFrame = 0;
+  private measuring = false;
+  /** 排队等下一帧落实的画质与尺寸（见 prepare）。 */
+  private nextQuality: QualityLevel | null = null;
+  private wanted = { width: 1, height: 1 };
+  private sizeDirty = true;
   /** 最近一帧渲染耗时（毫秒，CPU 侧提交时间）。 */
   drawMs = 0;
+  /** 累计画了多少帧（测试与测帧率用）。 */
+  frames = 0;
   bloomStrength = 0.6;
 
   constructor(canvas: HTMLCanvasElement, options: EngineOptions = {}) {
@@ -183,8 +209,7 @@ export class Engine {
 
     this.maxQuality = options.maxQuality ?? 3;
     this.pinned = options.pinned ?? null;
-    this.quality =
-      this.pinned ?? (this.software ? 0 : (Math.min(2, this.maxQuality) as QualityLevel));
+    this.quality = this.pinned ?? this.autoStart;
 
     this.target = this.makeTarget(1, 1);
     this.composer = new EffectComposer(renderer, this.target);
@@ -213,19 +238,35 @@ export class Engine {
     return QUALITY[this.quality];
   }
 
-  setQuality(level: QualityLevel): void {
-    const next = Math.max(0, Math.min(this.maxQuality, level)) as QualityLevel;
-    if (next === this.quality) return;
-    this.quality = next;
-    this.applyQuality();
+  /** 自动调节的起点：有显卡用中档，软件渲染用最低档。 */
+  private get autoStart(): QualityLevel {
+    return this.software ? 0 : (Math.min(AUTO_MAX, this.maxQuality) as QualityLevel);
   }
 
+  /** 换画质档位。要改画布尺寸，所以排到下一帧开画前才落实（见 prepare）。 */
+  setQuality(level: QualityLevel): void {
+    const next = Math.max(0, Math.min(this.maxQuality, level)) as QualityLevel;
+    this.nextQuality = next === this.quality ? null : next;
+  }
+
+  /** 固定画质（设置里选的档位）；null 表示自动，从默认档重新开始。 */
   pin(level: QualityLevel | null): void {
+    if (level === this.pinned) return;
     this.pinned = level;
-    if (level !== null) {
-      this.quality = level;
-      this.applyQuality();
+    this.setQuality(level ?? this.autoStart);
+    this.governor.restart();
+  }
+
+  /**
+   * 主循环按 60 帧的节奏画战斗时打开：只有这时才按帧间隔自动升降画质（菜单、暂停时故意画得慢，
+   * 不能当成卡顿）。
+   */
+  set measure(on: boolean) {
+    if (on && !this.measuring) {
+      this.governor.restart();
+      this.lastFrame = 0;
     }
+    this.measuring = on;
   }
 
   private applyQuality(): void {
@@ -239,17 +280,33 @@ export class Engine {
       this.composer.reset(this.target);
       old.dispose();
     }
-    this.resize(this.width, this.height, true);
+    this.sizeDirty = true;
   }
 
-  resize(width: number, height: number, force = false): void {
-    width = Math.max(1, Math.floor(width));
-    height = Math.max(1, Math.floor(height));
+  /** 记下窗口尺寸；真正改画布在下一帧开画前（见 prepare）。 */
+  resize(width: number, height: number): void {
+    this.wanted = {
+      width: Math.max(1, Math.floor(width)),
+      height: Math.max(1, Math.floor(height)),
+    };
+    this.sizeDirty = true;
+  }
+
+  /**
+   * 把排队的画质与尺寸落实到渲染器上。改画布尺寸会清空画布，要是在画完之后才改，这一帧显示出来
+   * 就是黑的；所以只在马上要画之前做。每帧开画前调用（render 里也会调用）。
+   */
+  prepare(): void {
+    if (this.nextQuality !== null) {
+      this.quality = this.nextQuality;
+      this.nextQuality = null;
+      this.applyQuality();
+    }
     const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
     const ratio = Math.min(dpr, QUALITY[this.quality].maxPixelRatio);
-    if (!force && width === this.width && height === this.height && ratio === this.pixelRatio) {
-      return;
-    }
+    if (!this.sizeDirty && ratio === this.pixelRatio) return;
+    this.sizeDirty = false;
+    const { width, height } = this.wanted;
     this.width = width;
     this.height = height;
     this.pixelRatio = ratio;
@@ -264,18 +321,21 @@ export class Engine {
 
   /** 渲染一帧；dt 用于自动调节画质。 */
   render(scene: THREE.Scene, camera: THREE.Camera, dt = 1 / 60): void {
+    this.prepare();
     const start = performance.now();
     this.renderPass.scene = scene;
     this.renderPass.camera = camera;
     this.bloom.strength = this.bloomStrength;
     this.composer.render(dt);
     this.drawMs = performance.now() - start;
-    const now = start;
-    const frameMs = this.lastFrame ? now - this.lastFrame : 16;
-    this.lastFrame = now;
-    if (this.pinned === null && frameMs < 250) {
+    this.frames++;
+    const frameMs = this.lastFrame ? start - this.lastFrame : 16.7;
+    this.lastFrame = start;
+    if (this.pinned === null && this.measuring && frameMs < 250) {
       const step = this.governor.sample(frameMs, dt);
-      if (step !== 0) this.setQuality((this.quality + step) as QualityLevel);
+      if (step < 0) this.setQuality((this.quality - 1) as QualityLevel);
+      else if (step > 0 && this.quality < AUTO_MAX)
+        this.setQuality((this.quality + 1) as QualityLevel);
     }
   }
 
