@@ -85,6 +85,7 @@ export class BattleView implements Stagehand {
     radial: 0,
     center: new THREE.Vector2(0.5, 0.5),
     dim: 0,
+    dimLevel: 0,
   };
   private width = 1;
   private height = 1;
@@ -262,6 +263,10 @@ export class BattleView implements Stagehand {
     this.radial(v.center(), 0.035);
   }
 
+  hitFlash(unitId: number, strong: boolean): void {
+    this.views.get(unitId)?.hit(strong);
+  }
+
   skillCam(unitId: number, big: boolean): void {
     if (!this.settings.cinematics || this.rig.inShot) return;
     if (this.time - this.lastSkillCam < (big ? 2.6 : 3.6)) return;
@@ -420,13 +425,15 @@ export class BattleView implements Stagehand {
     s.flash = Math.max(0, s.flash - dt * 3);
     s.aberration = Math.max(0, s.aberration - dt * 0.03);
     s.radial = Math.max(0, s.radial - dt * 0.05);
+    // 大招特写开头压暗一点、突出出手的宠物：约 0.15 秒渐暗再慢慢恢复（一下子变暗像黑屏闪了一下）
     s.dim = Math.max(0, s.dim - dt * 1.1);
+    s.dimLevel += (s.dim - s.dimLevel) * (1 - Math.exp(-dt * (s.dim > s.dimLevel ? 16 : 8)));
     const g = this.engine.grade.uniforms;
     g.uFlash.value.set(s.flashColor.r, s.flashColor.g, s.flashColor.b, s.flash);
     g.uAberration.value = s.aberration;
     g.uRadial.value = s.radial;
     g.uCenter.value.copy(s.center);
-    g.uTint.value.set(0.42, 0.4, 0.55, s.dim * 0.5);
+    g.uTint.value.set(0.42, 0.4, 0.55, s.dimLevel * 0.3);
     // 特写时血条、数字退到后面（只是变淡，敌我和血量仍然看得见）；近景里发光物占的画面大，泛光收一些
     const fadeGoal = this.rig.inUltShot ? 0.6 : this.rig.inShot ? 0.35 : 0;
     this.hud.fade += (fadeGoal - this.hud.fade) * (1 - Math.exp(-dt * 10));
@@ -436,6 +443,7 @@ export class BattleView implements Stagehand {
 
   /** 提交渲染（3D 画面 + 2D 叠加层）。 */
   draw(dt: number): void {
+    this.engine.prepare();
     outlineShared.resolution.set(
       this.width * this.engine.pixelRatio,
       this.height * this.engine.pixelRatio,
@@ -516,6 +524,8 @@ export class BattleView implements Stagehand {
     quality: number;
     drawMs: number;
     fps: number;
+    /** 累计画了多少帧。 */
+    frames: number;
     /** 正在拍的特写：0 没有，1 技能特写，2 大招特写。 */
     shot: number;
     shotUnit: number;
@@ -529,6 +539,7 @@ export class BattleView implements Stagehand {
       quality: this.engine.quality,
       drawMs: this.engine.drawMs,
       fps: 1000 / Math.max(1, this.engine.frameEma),
+      frames: this.engine.frames,
     };
   }
 

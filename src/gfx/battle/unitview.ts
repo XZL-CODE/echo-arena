@@ -33,8 +33,8 @@ export class UnitView {
   readonly ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   readonly height: number;
   private yaw: number;
-  private lastHitAt = -9;
   private flash = 0;
+  private flashCooldown = 0;
   private deadSince = -1;
   private removed = false;
   /** 头顶在世界里的位置（血条、伤害数字用）。 */
@@ -142,13 +142,10 @@ export class UnitView {
     );
     for (const face of this.model.faces) face.set(this.animator.expression);
 
-    // 受击闪白（0.1 秒）
-    if (u.hitAt > this.lastHitAt + 1e-6) {
-      this.lastHitAt = u.hitAt;
-      this.flash = 1;
-    }
+    // 受击闪白（约 0.1 秒，见 hit）
+    this.flashCooldown = Math.max(0, this.flashCooldown - dt);
     this.flash = Math.max(0, this.flash - dt * 9);
-    this.model.setFlash(this.flash * 0.75, 0xffffff);
+    this.model.setFlash(this.flash * 0.6, 0xffffff);
 
     // 持续状态的染色：灼烧橙红脉动、石肤灰、定身绿、眩晕黄
     if (u.burn > 0) this.model.setTint(0.35 + 0.15 * Math.sin(time * 14), 0xff7a3a);
@@ -180,6 +177,16 @@ export class UnitView {
 
   center(out = _v): THREE.Vector3 {
     return out.set(this.world.x, this.lift + this.height * 0.5, this.world.z);
+  }
+
+  /**
+   * 挨打闪白一下。同一只 0.5 秒内最多闪一次：混战里一只宠物每秒要挨好几下，下下都闪就成了频闪。
+   * 持续伤害不闪（导演只在直接命中时调用）；strong 是克制、高等级回响或击倒，闪得亮一些。
+   */
+  hit(strong: boolean): void {
+    if (this.flashCooldown > 0) return;
+    this.flash = strong ? 1 : 0.7;
+    this.flashCooldown = 0.5;
   }
 
   dispose(): void {

@@ -366,6 +366,7 @@ export class Showcase {
   }
 
   render(engine: Engine, dt: number): void {
+    engine.prepare();
     const w = engine.width;
     const h = Math.max(1, engine.height);
     this.camera.aspect = w / h;

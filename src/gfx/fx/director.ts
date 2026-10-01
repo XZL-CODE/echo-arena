@@ -38,6 +38,8 @@ export type FxEvent =
       counter?: number;
       killed: boolean;
       source?: string;
+      /** 持续伤害（灼烧）的一跳。 */
+      dot?: boolean;
     }
   | { type: 'heal'; targetId: number; amount: number; x: number; y: number }
   | { type: 'shield'; targetId: number; amount: number }
@@ -114,6 +116,8 @@ export interface Stagehand {
   ult(unitId: number, target?: THREE.Vector3): void;
   /** 技能特写（镜头推近一下，有节流）；big 表示进化后的大技能。 */
   skillCam(unitId: number, big: boolean): void;
+  /** 挨打的单位闪白一下（同一只有间隔，见 UnitView.hit）。 */
+  hitFlash(unitId: number, strong: boolean): void;
   gentle: boolean;
 }
 
@@ -135,6 +139,8 @@ export class FxDirector {
   private flashes: Array<{ x: number; z: number; t: number }> = [];
   private clock = 0;
   private stunTimer = 0;
+  /** 上一盏命中点光源亮起的时刻。 */
+  private lastHitLight = -9;
 
   constructor(stagehand: Stagehand) {
     this.s = stagehand;
@@ -533,7 +539,13 @@ export class FxDirector {
         e.team,
       );
     }
-    if (big && this.canFlash(at)) this.s.effects.light(at, c.main, 6 + echo * 2, 3.5, 0.18);
+    if (!e.dot) this.s.hitFlash(e.targetId, big);
+    // 命中点光源只给 2 级以上的回响和击倒，全场 0.3 秒最多一盏：每次克制命中都亮的话，
+    // 混战里场景每秒要一明一暗四五次
+    if ((echo >= 2 || e.killed) && this.clock - this.lastHitLight > 0.3 && this.canFlash(at)) {
+      this.lastHitLight = this.clock;
+      this.s.effects.light(at, c.main, 4 + echo * 1.5, 3.5, 0.18);
+    }
     if (e.killed) {
       this.s.shake(0.12);
       this.s.hitstop(0.035);
