@@ -1,7 +1,7 @@
 {
   "name": "echo-arena",
   "productName": "回声竞技场",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "回声竞技场：可在 macOS 与 Windows 上离线游玩的宠物军团自动对战游戏（桌面客户端）",
   "author": "Echo Arena",
