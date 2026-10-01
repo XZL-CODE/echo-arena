@@ -367,7 +367,8 @@ export class BattleView implements Stagehand {
     // 单位按一个球算：大个子（首领）的身体比模拟里的碰撞半径长得多，按高度放大
     const r = Math.max(0.4, v.height * (v.height > 2 ? 0.5 : 0.36));
     const c = v.center(_c);
-    if (c.distanceTo(eye) < r + 0.7) return 6;
+    // 贴着镜头的单位（按模型实际伸展范围，烛龙的翅膀也算）会在画面里挡住一大块，近处又背光，看着像一团黑
+    if (c.distanceTo(eye) < r + 0.7 || v.clearance(eye) < 1.4) return 6;
     _seg.copy(target).sub(eye);
     const t = _rel.copy(c).sub(eye).dot(_seg) / Math.max(1e-6, _seg.lengthSq());
     if (t <= 0.02 || t >= 0.92) return 0;
