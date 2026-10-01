@@ -1,9 +1,9 @@
 {
   "name": "echo-arena",
   "productName": "回声竞技场",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
-  "description": "回声竞技场：可在 macOS 与 Windows 上离线游玩的单人短局战术小游戏（桌面客户端）",
+  "description": "回声竞技场：可在 macOS 与 Windows 上离线游玩的宠物军团自动对战游戏（桌面客户端）",
   "author": "Echo Arena",
   "type": "module",
   "main": "electron/main.cjs",
@@ -39,6 +39,8 @@
       "dist/**/*",
       "!dist/**/*.map",
       "!dist/.build-stamp",
+      "!dist/lab.html",
+      "!dist/js/lab/**",
       "electron/**/*",
       "package.json"
     ],
@@ -110,9 +112,11 @@
   "devDependencies": {
     "@playwright/test": "1.56.1",
     "@types/node": "^22.10.0",
+    "@types/three": "0.186.0",
     "electron": "44.4.5",
     "electron-builder": "26.15.3",
     "prettier": "^3.8.1",
+    "three": "0.186.1",
     "typescript": "~6.0.3"
   }
 }

@@ -1,30 +1,29 @@
 // 新手指引：压暗界面、只亮出这一步要操作的地方，用手指动画演示“点哪里、往哪拖”，
 // 玩家照着做了才进入下一步（战斗在等你）。亮出来的地方仍然可以直接点，其余地方点不到。
-// 目标每帧重新定位，界面重建、侧栏滚动或窗口缩放时都跟着走。
-import { portrait } from '../render/portrait.js';
-import { RAIL, VIEW_H, VIEW_W } from '../render/view.js';
+// 目标每帧重新定位：3D 场景里的单位在动、界面重建或窗口缩放时都跟着走。
+import { portrait } from '../gfx/portrait.js';
 import { cx, h, mount } from './dom.js';
 import { button, kbd } from './widgets.js';
 
-/** 竞技场坐标里的一块区域。 */
-export interface ArenaRect {
+/** 屏幕上的一块区域（CSS 像素，相对窗口）。 */
+export interface ScreenRect {
   x: number;
   y: number;
   w: number;
   h: number;
 }
 
-/** 竞技场坐标里的一点。 */
-export interface ArenaPoint {
+/** 屏幕上的一点（CSS 像素，相对窗口）。 */
+export interface ScreenPoint {
   x: number;
   y: number;
 }
 
-/** 要亮出来的地方：界面元素（按顺序取第一个看得见的），或竞技场里的一块区域。 */
-export type Spot = { el: string[] } | { arena: () => ArenaRect | null };
+/** 要亮出来的地方：界面元素（按顺序取第一个看得见的），或 3D 场景里算出来的一块屏幕区域。 */
+export type Spot = { el: string[] } | { screen: () => ScreenRect | null };
 
-/** 手指瞄准的地方：界面元素的中心，或竞技场里的一点。 */
-export type Aim = { el: string[] } | { arena: () => ArenaPoint | null };
+/** 手指瞄准的地方：界面元素的中心，或 3D 场景里算出来的一个屏幕点。 */
+export type Aim = { el: string[] } | { screen: () => ScreenPoint | null };
 
 /** 手指演示：点一下、从一处拖到另一处；path 不画手指，只让一个亮点沿虚线飞过去（示意去向）。 */
 export type HandMotion =
@@ -307,7 +306,11 @@ export class Guide {
     this.shownTitle = step.title;
     mount(
       this.card,
-      h('img', { class: 'guide-avatar', src: portrait('bell'), alt: '' }),
+      h('img', {
+        class: 'guide-avatar',
+        src: portrait('fox-3', { framing: 'face', size: [96, 96] }),
+        alt: '',
+      }),
       h(
         'div',
         { class: 'guide-body' },
@@ -380,35 +383,23 @@ export class Guide {
 
   // ---- 位置换算 ----
 
-  private arenaToScreen(x: number, y: number): Point | null {
-    const c = this.canvas.getBoundingClientRect();
-    if (c.width <= 0 || c.height <= 0) return null;
-    return {
-      x: c.left + ((x + RAIL) / VIEW_W) * c.width,
-      y: c.top + ((y + RAIL) / VIEW_H) * c.height,
-    };
-  }
-
   private spotBox(spot: Spot | undefined): Box | null {
     if (!spot) return null;
     if ('el' in spot) {
       const el = findElement(spot.el);
       return el ? visibleBox(el) : null;
     }
-    const r = spot.arena();
+    const r = spot.screen();
     if (!r) return null;
-    const a = this.arenaToScreen(r.x, r.y);
-    const b = this.arenaToScreen(r.x + r.w, r.y + r.h);
-    if (!a || !b) return null;
     // 画在画布上的区域不会超出画布。
     const c = this.canvas.getBoundingClientRect();
-    const left = Math.max(a.x, c.left);
-    const top = Math.max(a.y, c.top);
+    const left = Math.max(r.x, c.left);
+    const top = Math.max(r.y, c.top);
     return {
       left,
       top,
-      width: Math.min(b.x, c.right) - left,
-      height: Math.min(b.y, c.bottom) - top,
+      width: Math.min(r.x + r.w, c.right) - left,
+      height: Math.min(r.y + r.h, c.bottom) - top,
     };
   }
 
@@ -418,8 +409,7 @@ export class Guide {
       const box = el ? visibleBox(el) : null;
       return box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
     }
-    const p = aim.arena();
-    return p ? this.arenaToScreen(p.x, p.y) : null;
+    return aim.screen();
   }
 
   // ---- 每帧摆放 ----

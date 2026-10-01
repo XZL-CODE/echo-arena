@@ -3,8 +3,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { build, copyPublic } from './build.mjs';
-import { PUBLIC_DIR, ROOT_DIR } from './paths.mjs';
+import { build, copyPublic, copyThree } from './build.mjs';
+import { DIST_DIR, PUBLIC_DIR, ROOT_DIR } from './paths.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -26,6 +26,13 @@ let copyTimer = null;
 fs.watch(PUBLIC_DIR, { recursive: true }, () => {
   clearTimeout(copyTimer);
   copyTimer = setTimeout(copyPublic, 100);
+});
+
+// 新引用了 three.js 扩展时补拷到 dist/vendor。
+let vendorTimer = null;
+fs.watch(path.join(DIST_DIR, 'js'), { recursive: true }, () => {
+  clearTimeout(vendorTimer);
+  vendorTimer = setTimeout(copyThree, 300);
 });
 
 const electron = require(path.join(ROOT_DIR, 'node_modules', 'electron'));

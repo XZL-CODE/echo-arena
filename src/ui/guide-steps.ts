@@ -1,339 +1,267 @@
-// 新手指引的课程内容：每课几步，每步一句话，指着真实界面，手指演示要做的操作。
-// 课程在对应情形第一次出现时教：第一次战前准备、第一次开战、第一次能放主动招式、
-// 第一次打出回响、第一场结算、第一次挑奖励。
-import { MODULE_DEFS } from '../core/content/modules.js';
+// 新手指引的课程内容：每课几步，每步一句话，指着真实界面或 3D 战场里的单位，手指演示要做的操作。
+// 课程在对应情形第一次出现时教：第一次战前准备、第一次开战、第一次打出回响、我方第一次放大招、
+// 第一场结算、第一次挑奖励。
 import { ARENA } from '../core/content/tuning.js';
-import { unitDef } from '../core/content/units.js';
 import type { GuidePart } from '../core/run/save.js';
-import {
-  PLAYER_UNITS,
-  type DamageSource,
-  type ModuleId,
-  type PlayerUnitKind,
-} from '../core/types.js';
-import type { ArenaController } from '../game/arena.js';
-import type { ArenaPoint, ArenaRect, GuideStep } from './guide.js';
+import type { World } from '../core/sim/world.js';
+import type { BattleView } from '../gfx/battle/view.js';
+import type { GuideStep, ScreenPoint, ScreenRect } from './guide.js';
 
 export const GUIDE_LABEL: Record<GuidePart, string> = {
   prep: '战前准备',
   battle: '开战',
-  skill: '放招式',
   echo: '回响',
+  ult: '大招',
   result: '结算',
-  reward: '挑奖励',
+  reward: '收服与进化',
 };
-
-export const UNIT_KEYS: Record<PlayerUnitKind, string> = { guard: '1', slinger: '2', bell: '3' };
 
 /** 课程需要读取的游戏状态。 */
 export interface LessonContext {
-  arena: ArenaController;
-  /** 当前界面（prep / battle / result / reward / summary）。 */
-  view: () => string;
+  view: BattleView;
+  world: () => World | null;
+  /** 当前界面（prep / battle / result / reward …）。 */
+  screen: () => string;
   /** 第一次教（照做才往下走）还是重看。 */
   mode: 'teach' | 'review';
-  /** 战前拖动或摆放队员的次数。 */
+  /** 战前拖动站位的次数。 */
   formationMoves: () => number;
-  /** 这一场放出的主动招式次数。 */
-  casts: () => number;
-  /** 奖励界面是否已经点了一张卡。 */
-  rewardPicked: () => boolean;
+  /** 奖励界面已经选中的收服与进化。 */
+  rewardPick: () => { capture?: number; evolve?: number };
 }
 
-/** 回响课需要的那一次回响：在哪里、第几级、由什么引起，以及接下来飞向哪里。 */
+/** 回响课要圈出来的那一次回响（模拟坐标）。 */
 export interface EchoMoment {
   x: number;
   y: number;
   level: number;
-  source: DamageSource;
-  to?: ArenaPoint | null;
+}
+
+// ---- 屏幕位置 ----
+
+/** 拖动演示的终点留在我方布阵区里（与规则核心的布阵区一致）。 */
+const ZONE = { minX: ARENA.margin + 40, maxX: ARENA.playerZoneMaxX - 20, minY: ARENA.margin + 60 };
+
+/** 单位在屏幕上的框（按头顶到脚下的高度估个宽度）。 */
+function unitBox(view: BattleView, id: number): ScreenRect | null {
+  const s = view.unitScreen(id);
+  if (!s) return null;
+  const tall = Math.max(30, (s.y - s.top) * 2.1);
+  const w = Math.max(44, tall * 0.8);
+  return { x: s.x - w / 2, y: s.top - 8, w, h: tall + 12 };
+}
+
+/** 一方全部还活着的单位在屏幕上的包围框。 */
+function teamBox(view: BattleView, world: World | null, team: 0 | 1): ScreenRect | null {
+  if (!world) return null;
+  let box: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  for (const u of world.units) {
+    if (u.team !== team || !u.alive) continue;
+    const b = unitBox(view, u.id);
+    if (!b) continue;
+    if (!box) box = { x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h };
+    else {
+      box.x0 = Math.min(box.x0, b.x);
+      box.y0 = Math.min(box.y0, b.y);
+      box.x1 = Math.max(box.x1, b.x + b.w);
+      box.y1 = Math.max(box.y1, b.y + b.h);
+    }
+  }
+  return box ? { x: box.x0, y: box.y0, w: box.x1 - box.x0, h: box.y1 - box.y0 } : null;
+}
+
+function unitPoint(view: BattleView, id: number): ScreenPoint | null {
+  const s = view.unitScreen(id);
+  return s ? { x: s.x, y: (s.y + s.top) / 2 } : null;
+}
+
+/** 离我方最近的敌人（集火演示点它）。 */
+function frontEnemy(world: World | null): number {
+  if (!world) return 0;
+  let best = 0;
+  let bestX = Infinity;
+  for (const u of world.units) {
+    if (u.team !== 1 || !u.alive) continue;
+    if (u.x < bestX) {
+      bestX = u.x;
+      best = u.id;
+    }
+  }
+  return best;
+}
+
+/** 我方站在最前面的一只（拖动演示拿它）。 */
+function frontAlly(world: World | null): number {
+  if (!world) return 0;
+  let best = 0;
+  let bestX = -Infinity;
+  for (const u of world.units) {
+    if (u.team !== 0 || !u.alive || !u.uid) continue;
+    if (u.x > bestX) {
+      bestX = u.x;
+      best = u.id;
+    }
+  }
+  return best;
 }
 
 // ---- 战前准备 ----
 
 export function prepLesson(ctx: LessonContext): GuideStep[] {
   let moves = 0;
+  /** 拖动演示：拿最前面的一只，往场地中线方向挪一大步（模拟坐标，进入这一步时定下）。 */
+  let drag: { id: number; x: number; y: number } | null = null;
   return [
     {
       title: '先看对手',
-      text: '每场开始前看一眼：对手是谁、有什么特点；目标是把它们全部击倒。',
-      spots: [{ el: ['[data-testid=match-header]'] }, { arena: () => enemyArea(ctx.arena) }],
+      text: '看一眼对手有哪些宠物、是什么属性。五系相克：水克火、火克木、木克岩、岩克雷、雷克水，克制时伤害多三成。',
+      spots: [{ el: ['[data-guide=foe]'] }, { screen: () => teamBox(ctx.view, ctx.world(), 1) }],
     },
     {
-      title: '选一个开局招式',
-      text: '三种办法，点一下就换；拿不准就选反射盾，把飞来的箭弹回去。',
-      spots: [{ el: ['.starter-list'] }],
-      hand: { kind: 'tap', at: { el: ['.starter-on', '.starter'] } },
-      tapDone: true,
-      optional: true,
+      title: '这是你的军团',
+      text: '每只宠物会自己走位、自己出招。赢了可以收服新宠物、让宠物进化，军团越打越强。',
+      spots: [{ el: ['[data-guide=legion]'] }],
     },
     {
-      title: '拖动队员，摆好站位',
-      text: '按住队员拖到亮起区域里的任意位置；也可以先点队员，再点空地。',
-      spots: [{ arena: () => ({ x: 0, y: 0, w: ARENA.playerZoneMaxX, h: ARENA.height }) }],
-      hand: {
-        kind: 'drag',
-        from: { arena: () => unitPoint(ctx.arena, 'guard') },
-        to: { arena: () => dragGoal(ctx.arena) },
+      title: '拖动宠物，摆好站位',
+      text: '按住我方的一只宠物拖到别处，放开就定好了：坦克放前面挡着，射手和辅助放后面。',
+      spots: [{ screen: () => teamBox(ctx.view, ctx.world(), 0) }],
+      hand: () => {
+        const target = drag;
+        if (!target) return null;
+        return {
+          kind: 'drag',
+          from: { screen: () => unitPoint(ctx.view, target.id) },
+          to: { screen: () => ctx.view.screenOf(target.x, target.y, 0.3) },
+        };
       },
       enter: () => {
         moves = ctx.formationMoves();
+        const w = ctx.world();
+        const id = frontAlly(w);
+        const u = id ? w?.unitById(id) : undefined;
+        drag = null;
+        if (!w || !u) return;
+        const y = u.y < w.height / 2 ? u.y + 220 : u.y - 220;
+        drag = {
+          id,
+          x: Math.max(ZONE.minX, Math.min(ZONE.maxX, u.x - 30)),
+          y: Math.max(ZONE.minY, Math.min(w.height - ZONE.minY, y)),
+        };
       },
       done: () => ctx.formationMoves() > moves,
     },
     {
       title: '点“开战”',
-      text: '开战后队员会自己走位、自己攻击；你来点集火、放招式。',
-      spots: [{ el: ['[data-testid=fight]'] }],
-      hand: { kind: 'tap', at: { el: ['[data-testid=fight]'] } },
+      text: '开战后全自动：你只需要在关键时刻点敌人集火，或者暂停、加速。',
+      spots: [{ el: ['[data-testid=start-battle]'] }],
+      hand: { kind: 'tap', at: { el: ['[data-testid=start-battle]'] } },
       keys: ['Enter'],
-      done: () => ctx.view() !== 'prep',
+      done: () => ctx.screen() !== 'prep',
     },
   ];
 }
 
 // ---- 战斗 ----
 
-/** 开战第一课：集火，然后按空格开打。 */
 export function battleLesson(ctx: LessonContext): GuideStep[] {
-  return [focusStep(ctx), pauseStep(ctx)];
-}
-
-function focusStep(ctx: LessonContext): GuideStep {
   let focus = 0;
-  return {
-    title: '点一个对手，集火它',
-    text: '战斗停着等你。点一个对手，阿铁和小弹会优先打它；再点一次取消。',
-    spots: [{ arena: () => enemyArea(ctx.arena) }],
-    hand: { kind: 'tap', at: { arena: () => frontEnemy(ctx.arena) } },
-    enter: () => {
-      focus = ctx.arena.world?.focusId ?? 0;
-    },
-    done: () => {
-      const now = ctx.arena.world?.focusId ?? 0;
-      return now !== 0 && now !== focus;
-    },
-  };
-}
-
-function pauseStep(ctx: LessonContext): GuideStep {
-  return {
-    title: ctx.mode === 'teach' ? '按空格开打' : '按空格继续',
-    text: '空格随时暂停、继续；停着的时候也能放招式、点集火，不用手忙脚乱。',
-    spots: [{ el: ['[data-testid=pause]'] }],
-    keep: [{ arena: () => enemyArea(ctx.arena) }],
-    hand: { kind: 'tap', at: { el: ['[data-testid=pause]'] } },
-    keys: [' '],
-    done: () => !ctx.arena.paused,
-  };
-}
-
-/** 第一次能放主动招式：先点招式按钮，再点场地。 */
-export function skillLesson(ctx: LessonContext, kind: PlayerUnitKind): GuideStep[] {
-  const module = ctx.arena.world?.playerUnit(kind)?.active;
-  if (!module) return [];
-  const name = MODULE_DEFS[module].name;
-  const key = UNIT_KEYS[kind];
-  const button = `[data-testid=skill-${kind}]`;
-  let casts = 0;
   return [
     {
-      title: `第一步：点「${name}」`,
-      text: `${unitDef(kind).name}的主动招式准备好了：点这个按钮，或者按 ${key}。`,
-      spots: [{ el: [button] }],
-      hand: { kind: 'tap', at: { el: [button] } },
-      keys: [key],
-      done: () => ctx.arena.targeting === kind,
-    },
-    {
-      title: '第二步：点场地放出去',
-      text: AIM_TEXT[module] ?? '点场地上的位置发动；右键取消。',
-      spots: [{ el: ['[data-testid=arena]'] }],
-      hand: { kind: 'tap', at: { arena: () => castPoint(ctx.arena, module) } },
+      title: '点一个敌人，集火它',
+      text: '战斗停着等你。点一个敌人，全军会优先打它；再点一次取消。先打掉对面的治疗和法师，往往能扭转局面。',
+      spots: [{ screen: () => teamBox(ctx.view, ctx.world(), 1) }],
+      hand: { kind: 'tap', at: { screen: () => unitPoint(ctx.view, frontEnemy(ctx.world())) } },
       enter: () => {
-        casts = ctx.casts();
+        focus = ctx.world()?.focusId ?? 0;
       },
-      done: () => ctx.casts() > casts,
-      back: () => ctx.mode === 'teach' && ctx.arena.targeting !== kind && ctx.casts() === casts,
+      done: () => {
+        const now = ctx.world()?.focusId ?? 0;
+        return now !== 0 && now !== focus;
+      },
+    },
+    {
+      title: '暂停与加速',
+      text: '右上角可以加速到 2 倍、3 倍，或者打开暂停菜单；战斗中按空格键暂停 / 继续，按 1、2、3 切换倍速。',
+      spots: [{ el: ['[data-guide=speed]'] }, { el: ['[data-testid=pause]'] }],
     },
   ];
 }
 
-const AIM_TEXT: Partial<Record<ModuleId, string>> = {
-  vortex: '点对手扎堆的地方：漩涡把附近的对手吸到一起，这时候它们打不了人。',
-  charge: '点对手所在的位置：阿铁冲过去，把沿途的对手撞开。',
-  pierce: '朝对手点一下：小弹射出贯穿大弹，推开一整条线上的对手。',
-};
+// ---- 回响 ----
 
-/** 第一次打出回响：定格在那一刻讲。 */
-export function echoLesson(moment: EchoMoment): GuideStep[] {
-  const to = moment.to;
-  const area = to
-    ? spanning(moment, to, 70)
-    : { x: moment.x - 90, y: moment.y - 90, w: 180, h: 180 };
+export function echoLesson(ctx: LessonContext, moment: EchoMoment | null): GuideStep[] {
   return [
     {
-      title: `回响 ×${moment.level}！`,
-      text: `${ECHO_CAUSE[moment.source] ?? '一次攻击接着传了下去'}；每多传一次，回响 +1，伤害越来越高。`,
-      spots: [{ arena: () => area }, { el: ['.echo-line'] }],
-      hand: to
-        ? { kind: 'path', from: { arena: () => moment }, to: { arena: () => to } }
-        : undefined,
+      title: `回响 ×${moment?.level ?? 2}`,
+      text: '被击飞的单位撞上别的单位，或者撞到场地边缘的结界，就会产生回响：同一串连锁每多一环，伤害 +25%，最多 8 级。',
+      spots: [
+        {
+          screen: () => {
+            if (!moment) return null;
+            const p = ctx.view.screenOf(moment.x, moment.y, 0.4);
+            return { x: p.x - 70, y: p.y - 70, w: 140, h: 140 };
+          },
+        },
+      ],
     },
   ];
 }
 
-const ECHO_CAUSE: Partial<Record<DamageSource, string>> = {
-  reflect: '箭撞上阿铁的反射盾，原路弹回去射向射手',
-  mirrorpost: '对手的弹丸被镜桩拐了个弯，飞向另一个对手',
-  ricochet: '弹丸打中一个对手，又弹向下一个',
-  rubber: '弹丸撞墙弹了回来，又飞向对手',
-  impact: '被撞开的对手撞上了墙、柱子或同伴',
-  spring: '对手撞上弹簧桩，被猛地弹开',
-  charge: '阿铁冲过去撞开对手，对手又撞上别的东西',
-  pierce: '贯穿大弹推着对手撞了出去',
-  heavy: '重弹把对手打飞，撞上了别的东西',
-  burst: '被击倒的对手炸开，波及周围的对手',
-  detonate: '被击倒的对手炸开，波及周围的对手',
-  vortex: '漩涡把对手挤在一起，伤害接着传了下去',
-};
+// ---- 大招 ----
 
-/** 重看时讲回响：指着底栏记录最长回响的地方。 */
-export function echoReview(): GuideStep {
-  return {
-    title: '回响',
-    text: '弹回、弹射、撞墙、撞飞、连爆，每传一次回响 +1，伤害越来越高；这里记着本场最长的回响。',
-    spots: [{ el: ['.echo-line'] }],
-  };
-}
-
-/** 战斗中点“？”重看：集火、放招式（装了的话）、回响，最后按空格继续。 */
-export function battleReview(ctx: LessonContext): GuideStep[] {
-  const kind = PLAYER_UNITS.find((k) => ctx.arena.world?.playerUnit(k)?.active);
-  return [focusStep(ctx), ...(kind ? skillLesson(ctx, kind) : []), echoReview(), pauseStep(ctx)];
-}
-
-// ---- 结算与奖励 ----
-
-export function resultLesson(ctx: LessonContext, win: boolean): GuideStep[] {
-  if (win) {
-    return [
-      {
-        title: '赢了！去挑奖励',
-        text: '每赢一场，都能从三张招式卡里挑一张带进下一场，队伍越打越有花样。',
-        spots: [{ el: ['[data-testid=result-next]'] }],
-        keep: [{ el: ['[data-testid=result]'] }],
-        hand: { kind: 'tap', at: { el: ['[data-testid=result-next]'] } },
-        keys: ['Enter'],
-        done: () => ctx.view() !== 'result',
-      },
-    ];
-  }
+export function ultLesson(ctx: LessonContext, unitId: number): GuideStep[] {
   return [
     {
-      title: '没赢也不亏',
-      text: '“原样再来”的对手和随机条件完全一样；“调整配置再试”能换招式、换站位，拿到的招式都在。',
-      spots: [{ el: ['.result-actions'] }],
-      keep: [{ el: ['[data-testid=result]'] }],
+      title: '大招',
+      text: '进化到第三阶的人形态宠物会攒能量（头像下面的金色条），满了自动放大招，镜头会给它一个特写。',
+      spots: [
+        { el: ['[data-guide=strip]'] },
+        { screen: () => (unitId ? unitBox(ctx.view, unitId) : null) },
+      ],
     },
   ];
 }
+
+// ---- 结算 ----
+
+export function resultLesson(): GuideStep[] {
+  return [
+    {
+      title: '看看这一场',
+      text: '这里列出这一场的关键数据：谁打得最多、克制打了多少、回响连到几级。输了可以回到战前调整站位再来。',
+      spots: [{ el: ['[data-guide=result]'] }],
+    },
+  ];
+}
+
+// ---- 收服与进化 ----
 
 export function rewardLesson(ctx: LessonContext): GuideStep[] {
-  const confirm = '[data-testid=reward-confirm]';
   return [
     {
-      title: '挑一张，带进下一场',
-      text: '点一张卡再点确认；每名队员 2 个槽位，装不下的新招式会放进招式库，战前可以换。',
-      spots: [{ el: ['.offer-row'] }, { el: [confirm] }],
-      hand: () =>
-        ctx.rewardPicked()
-          ? { kind: 'tap', at: { el: [confirm] } }
-          : { kind: 'tap', at: { el: ['[data-testid^=offer-]'] } },
-      keys: ['1', '2', '3', 'Enter'],
-      done: () => ctx.view() !== 'reward',
+      title: '收服一只新宠物',
+      text: '点一张卡，把它收进军团（军团有上限，满了这一行就没有）。',
+      spots: [{ el: ['[data-guide=capture]'] }],
+      hand: { kind: 'tap', at: { el: ['[data-testid=capture-0]'] } },
+      done: () => ctx.rewardPick().capture !== undefined,
+      optional: true,
     },
-  ];
-}
-
-export function practiceDoneReview(): GuideStep[] {
-  return [
     {
-      title: '教学战打完了',
-      text: '开始正式的一轮，或者回到标题；之后想再练，标题页的“新手指引”随时可以进来。',
-      spots: [{ el: ['[data-testid=practice-done] .result-actions'] }],
+      title: '让一只宠物进化',
+      text: '再点一张，让它进化。进化到第三阶就变成人形态，还会获得大招。',
+      spots: [{ el: ['[data-guide=evolve]'] }],
+      hand: { kind: 'tap', at: { el: ['[data-testid=evolve-0]'] } },
+      done: () => ctx.rewardPick().evolve !== undefined,
+      optional: true,
     },
-  ];
-}
-
-export function summaryReview(): GuideStep[] {
-  return [
     {
-      title: '这一轮打完了',
-      text: '再来一轮换个思路，或者回到标题；标题页的“新手指引”会带你进教学战，从头练一遍。',
-      spots: [{ el: ['[data-testid=summary] .result-actions'] }],
+      title: '点“确认”',
+      text: '两项同时生效，然后进入下一场的战前准备。',
+      spots: [{ el: ['[data-testid=claim]'] }],
+      hand: { kind: 'tap', at: { el: ['[data-testid=claim]'] } },
+      keys: ['Enter'],
+      tapDone: true,
     },
   ];
-}
-
-// ---- 场上的位置 ----
-
-/** 场上对手所在的区域。 */
-export function enemyArea(arena: ArenaController): ArenaRect | null {
-  const world = arena.world;
-  const foes = world?.units.filter((u) => u.alive && u.team === 1) ?? [];
-  if (!world || foes.length === 0) return null;
-  const xs = foes.map((u) => u.x);
-  const ys = foes.map((u) => u.y);
-  const x0 = Math.max(0, Math.min(...xs) - 50);
-  const x1 = Math.min(world.width, Math.max(...xs) + 50);
-  const y0 = Math.max(0, Math.min(...ys) - 70);
-  const y1 = Math.min(world.height, Math.max(...ys) + 45);
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
-
-/** 离我方最近的对手（手指点它的身体中部，和点选判定一致）。 */
-function frontEnemy(arena: ArenaController): ArenaPoint | null {
-  const foes = arena.world?.units.filter((u) => u.alive && u.team === 1) ?? [];
-  const front = foes.reduce<(typeof foes)[number] | null>(
-    (best, u) => (!best || u.x < best.x ? u : best),
-    null,
-  );
-  return front ? { x: front.x, y: front.y - front.radius * 0.4 } : null;
-}
-
-function unitPoint(arena: ArenaController, kind: PlayerUnitKind): ArenaPoint | null {
-  const u = arena.world?.playerUnit(kind);
-  return u ? { x: u.x, y: u.y - u.radius * 0.4 } : null;
-}
-
-/** 演示拖动的落点：竖着挪一大段（我方区域窄，横着挪不明显）。 */
-function dragGoal(arena: ArenaController): ArenaPoint | null {
-  const from = unitPoint(arena, 'guard');
-  if (!from) return null;
-  const x = Math.min(ARENA.playerZoneMaxX - 50, Math.max(60, from.x - 40));
-  const y = from.y > ARENA.height / 2 - 40 ? from.y - 170 : from.y + 170;
-  return { x, y };
-}
-
-/** 放招式的建议位置：漩涡放在对手中间，冲锋和贯穿射对准最近的对手。 */
-function castPoint(arena: ArenaController, module: ModuleId): ArenaPoint | null {
-  const foes = arena.world?.units.filter((u) => u.alive && u.team === 1) ?? [];
-  if (foes.length === 0) return null;
-  if (module === 'vortex') {
-    return {
-      x: foes.reduce((s, u) => s + u.x, 0) / foes.length,
-      y: foes.reduce((s, u) => s + u.y, 0) / foes.length,
-    };
-  }
-  return frontEnemy(arena);
-}
-
-/** 同时框住两点的区域（四周留出 pad）。 */
-function spanning(a: ArenaPoint, b: ArenaPoint, pad: number): ArenaRect {
-  const x0 = Math.max(0, Math.min(a.x, b.x) - pad);
-  const y0 = Math.max(0, Math.min(a.y, b.y) - pad);
-  const x1 = Math.min(ARENA.width, Math.max(a.x, b.x) + pad);
-  const y1 = Math.min(ARENA.height, Math.max(a.y, b.y) + pad);
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }

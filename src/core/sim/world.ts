@@ -1,36 +1,35 @@
 // 战斗世界：固定步长推进，所有随机都来自种子，便于重试比较与测试复现。
-import type { EncounterDef, Wave } from '../content/encounters.js';
-import { gadgetCount, MODULE_DEFS } from '../content/modules.js';
-import { ARENA, DIFFICULTY_MULT, MODULE_TUNING, SIM } from '../content/tuning.js';
-import { unitDef } from '../content/units.js';
+import type { EncounterDef } from '../content/encounters.js';
+import { COUNTER_BONUS, COUNTERED_MULT, counterMult, counterSign } from '../content/elements.js';
+import { DRAGON, formId, formName, formStats, SKILLS, SPECIES } from '../content/species.js';
+import {
+  ARENA,
+  BOSS_CC_MULT,
+  DIFFICULTY_MULT,
+  ENERGY,
+  MATCH_DAMAGE_SCALING,
+  MATCH_HP_SCALING,
+  SIM,
+} from '../content/tuning.js';
 import { clamp, dist, normalize } from '../math.js';
 import { hashSeed, Rng } from '../rng.js';
-import {
-  PLAYER_UNITS,
-  type DamageSource,
-  type Difficulty,
-  type Formation,
-  type Loadout,
-  type ModuleId,
-  type ModuleLevel,
-  type PlayerUnitKind,
-  type Team,
-  type UnitKind,
+import type {
+  BossId,
+  DamageSource,
+  Difficulty,
+  Element,
+  Form,
+  LegionPet,
+  SpeciesId,
+  Team,
 } from '../types.js';
 import { updateUnit } from './ai.js';
-import type {
-  Lob,
-  Obstacle,
-  PendingBlast,
-  Projectile,
-  SlideInfo,
-  Unit,
-  Vortex,
-} from './entities.js';
-import type { SimEvent } from './events.js';
+import type { BurstSpec, Projectile, SlideInfo, Unit, UnitAct, Zone } from './entities.js';
+import type { SimEvent, StatusKind } from './events.js';
 import { integrate } from './physics.js';
 import { updateProjectiles } from './projectiles.js';
 import { addTo, createStats, type BattleStats } from './stats.js';
+import { updateZones } from './zones.js';
 
 export interface BattleConfig {
   encounter: EncounterDef;
@@ -38,47 +37,61 @@ export interface BattleConfig {
   difficulty: Difficulty;
   /** 本轮第几场（0 起），用于轻微的强度递增。 */
   matchIndex: number;
-  loadout: Loadout;
-  /** 已拥有招式的等级。 */
-  levels: Partial<Record<ModuleId, ModuleLevel>>;
-  formation: Formation;
+  /** 玩家军团与站位。 */
+  legion: ReadonlyArray<LegionPet>;
 }
 
 export interface DamageInfo {
   /** 造成伤害的一方。 */
   team: Team;
+  sourceId: number;
   source: DamageSource;
+  element: Element;
   echo: number;
   chain: number;
-  attackerKind?: UnitKind;
+  /** 持续伤害（灼烧、燃烧地面）。 */
+  dot?: boolean;
+  /** 击倒目标时在原地连环爆炸（凤凰陨）。 */
+  burst?: BurstSpec | null;
 }
 
-/** 伤害来源归到哪名队员（团队招式不归属任何人）。 */
-const SOURCE_OWNER: Partial<Record<DamageSource, PlayerUnitKind>> = {
-  guard: 'guard',
-  reflect: 'guard',
-  charge: 'guard',
-  slinger: 'slinger',
-  ricochet: 'slinger',
-  rubber: 'slinger',
-  heavy: 'slinger',
-  pierce: 'slinger',
-  bell: 'bell',
-  vortex: 'bell',
-  magnet: 'bell',
-};
+export interface BlastSpec {
+  x: number;
+  y: number;
+  radius: number;
+  damage: number;
+  team: Team;
+  sourceId: number;
+  source: DamageSource;
+  element: Element;
+  echo: number;
+  chain: number;
+  knock?: number;
+  stun?: number;
+  /** 击飞到空中（眩晕 + 腾空）。 */
+  knockUp?: number;
+  burnDps?: number;
+  burnTime?: number;
+  burst?: BurstSpec | null;
+  ignoreId?: number;
+  /** 爆炸本身是一次传递（连爆、引爆）：记一次回响并计入统计。 */
+  transfer?: boolean;
+}
 
-export const MATCH_SCALING = 0.08;
-/** 每往后一场，对手伤害提高的比例。 */
-export const MATCH_DAMAGE_SCALING = 0.04;
+interface Timer {
+  at: number;
+  seq: number;
+  fn: () => void;
+}
+
+/** 首领生命降到一半之前不会掉到这条线以下，保证变身一定发生。 */
+const BOSS_FLOOR = 0.49;
 
 export class World {
   readonly width = ARENA.width;
   readonly height = ARENA.height;
   readonly config: BattleConfig;
   readonly rng: Rng;
-  /** 已装备招式的等级（没装备的招式不生效）。 */
-  readonly equipped: Partial<Record<ModuleId, ModuleLevel>>;
   readonly enemyHpMult: number;
   readonly enemyDamageMult: number;
 
@@ -86,79 +99,56 @@ export class World {
   tick = 0;
   units: Unit[] = [];
   projectiles: Projectile[] = [];
-  obstacles: Obstacle[] = [];
-  vortexes: Vortex[] = [];
-  lobs: Lob[] = [];
-  blasts: PendingBlast[] = [];
+  zones: Zone[] = [];
   events: SimEvent[] = [];
   stats: BattleStats = createStats();
   result: 'win' | 'lose' | null = null;
   resultTime = 0;
   focusId = 0;
   overtimeLevel = 0;
-  /** 木箭手齐射的公共节拍。 */
-  volleyClock = 1.4;
+  /** 本场出现过的全部形态标识（双方，含召唤与变身），图鉴用。 */
+  formsSeen: string[] = [];
 
   private nextId = 1;
   private nextChainId = 1;
   private spawnCount = 0;
-  private waves: Wave[];
+  private byId = new Map<number, Unit>();
+  private timers: Timer[] = [];
+  private timerSeq = 0;
   private chainInfo = new Map<number, { max: number; sources: DamageSource[] }>();
 
   constructor(config: BattleConfig) {
     this.config = config;
     this.rng = new Rng(hashSeed(config.seed, 'battle', config.encounter.id));
     const diff = DIFFICULTY_MULT[config.difficulty];
-    this.enemyHpMult = diff.enemyHp * (1 + MATCH_SCALING * config.matchIndex);
+    this.enemyHpMult = diff.enemyHp * (1 + MATCH_HP_SCALING * config.matchIndex);
     this.enemyDamageMult = diff.enemyDamage * (1 + MATCH_DAMAGE_SCALING * config.matchIndex);
-    this.equipped = equippedLevels(config.loadout, config.levels);
-    this.waves = [...(config.encounter.waves ?? [])].sort((a, b) => a.at - b.at);
 
-    for (const o of config.encounter.obstacles ?? []) {
-      this.obstacles.push({ id: this.nextId++, kind: 'pillar', x: o.x, y: o.y, r: o.r, hitAt: -9 });
+    for (const pet of config.legion) {
+      const r = formStats(pet.species, pet.form).radius;
+      const x = clamp(pet.x, r + 4, ARENA.playerZoneMaxX);
+      const y = clamp(pet.y, r + 4, ARENA.height - r - 4);
+      this.spawnPet(pet.species, pet.form, 0, x, y, pet.uid);
+      this.stats.pets.push({ uid: pet.uid, species: pet.species, form: pet.form });
     }
-    for (const g of config.formation.gadgets) {
-      const level = this.equipped[g.module];
-      if (!level || g.index >= gadgetCount(level)) continue;
-      const r = MODULE_TUNING[g.module].radius;
-      const x = clamp(g.x, ARENA.margin, ARENA.gadgetZoneMaxX);
-      const y = clamp(g.y, ARENA.margin, ARENA.height - ARENA.margin);
-      this.obstacles.push({ id: this.nextId++, kind: g.module, x, y, r, hitAt: -9 });
-    }
-
-    for (const kind of PLAYER_UNITS) {
-      const p = config.formation.units[kind];
-      const def = unitDef(kind);
-      const x = clamp(p.x, def.radius + 8, ARENA.playerZoneMaxX);
-      const y = clamp(p.y, def.radius + 8, ARENA.height - def.radius - 8);
-      this.spawnUnit(kind, x, y, false);
-    }
-    for (const e of config.encounter.enemies) {
-      this.spawnUnit(e.kind, e.x, e.y, false);
-    }
+    for (const e of config.encounter.legion) this.spawnPet(e.species, e.form, 1, e.x, e.y);
+    const boss = config.encounter.boss;
+    if (boss) this.spawnBoss(boss.x, boss.y);
   }
 
   // ---- 查询 ----
 
-  level(id: ModuleId): number {
-    return this.equipped[id] ?? 0;
-  }
-
   unitById(id: number): Unit | undefined {
-    return this.units.find((u) => u.id === id);
+    return this.byId.get(id);
   }
 
-  playerUnit(kind: PlayerUnitKind): Unit | undefined {
-    return this.units.find((u) => u.kind === kind && u.team === 0);
+  /** 玩家宠物（按 uid）。 */
+  petByUid(uid: number): Unit | undefined {
+    return this.units.find((u) => u.team === 0 && u.uid === uid);
   }
 
   aliveOf(team: Team): Unit[] {
     return this.units.filter((u) => u.alive && u.team === team);
-  }
-
-  /** 尚未出场的波次数。 */
-  wavesLeft(): number {
-    return this.waves.length;
   }
 
   overtimeMult(): number {
@@ -184,30 +174,32 @@ export class World {
     return out;
   }
 
+  /** 剩余对手生命占比（含召唤物），失败结算用。 */
+  enemyHpRemainingRatio(): number {
+    let remaining = 0;
+    for (const u of this.units) if (u.alive && u.team === 1) remaining += u.hp;
+    const total = this.stats.enemyTotalHp;
+    return total > 0 ? clamp(remaining / total, 0, 1) : 0;
+  }
+
   // ---- 推进 ----
 
   step(): void {
     const dt = SIM.dt;
     this.t += dt;
     this.tick++;
-
     for (const u of this.units) {
       u.px = u.x;
       u.py = u.y;
     }
-    this.spawnWaves();
     this.updateOvertime();
-    this.updateVolley(dt);
-
+    this.runTimers();
     for (const u of this.units) {
       if (u.alive) updateUnit(this, u, dt);
     }
-    this.updateVortexes(dt);
-    this.updateLobs(dt);
-    this.updateBlasts(dt);
+    updateZones(this, dt);
     integrate(this, dt);
     updateProjectiles(this, dt);
-
     if (this.tick % 60 === 0) this.compact();
     this.checkResult();
   }
@@ -218,11 +210,18 @@ export class World {
     for (let i = 0; i < steps; i++) this.step();
   }
 
-  private spawnWaves(): void {
-    while (this.waves.length > 0 && (this.waves[0] as Wave).at <= this.t) {
-      const wave = this.waves.shift() as Wave;
-      for (const e of wave.units) this.spawnUnit(e.kind, e.x, e.y, true);
-    }
+  /** delay 秒后执行（连锁闪电、依次落雷、连爆都一个接一个发生）。同一时刻按安排的先后执行。 */
+  after(delay: number, fn: () => void): void {
+    this.timers.push({ at: this.t + Math.max(0, delay), seq: this.timerSeq++, fn });
+  }
+
+  private runTimers(): void {
+    if (this.timers.length === 0) return;
+    const due = this.timers.filter((x) => x.at <= this.t + 1e-9);
+    if (due.length === 0) return;
+    this.timers = this.timers.filter((x) => x.at > this.t + 1e-9);
+    due.sort((a, b) => a.at - b.at || a.seq - b.seq);
+    for (const timer of due) timer.fn();
   }
 
   private updateOvertime(): void {
@@ -234,127 +233,19 @@ export class World {
     }
   }
 
-  private updateVolley(dt: number): void {
-    this.volleyClock -= dt;
-    if (this.volleyClock > 0) return;
-    this.volleyClock = unitDef('archer').cooldown;
-    let count = 0;
-    let sx = 0;
-    let sy = 0;
-    for (const u of this.units) {
-      if (!u.alive || u.kind !== 'archer' || u.slide || u.held || u.stun > 0) continue;
-      if (u.state === 'windup') continue;
-      const target = this.unitById(u.targetId);
-      if (!target || !target.alive) continue;
-      if (dist(u.x, u.y, target.x, target.y) > u.def.range) continue;
-      u.state = 'windup';
-      u.stateTime = u.def.windup;
-      u.aimX = target.x;
-      u.aimY = target.y;
-      count++;
-      sx += u.x;
-      sy += u.y;
-    }
-    if (count > 0) this.emit({ type: 'volley', x: sx / count, y: sy / count, count });
-  }
-
-  private updateVortexes(dt: number): void {
-    const tune = MODULE_TUNING.vortex;
-    for (const u of this.units) u.held = false;
-    for (const v of this.vortexes) {
-      v.time += dt;
-      for (const u of this.units) {
-        if (!u.alive || u.team !== 1 || u.def.immovable) continue;
-        const dx = v.x - u.x;
-        const dy = v.y - u.y;
-        const d = Math.hypot(dx, dy);
-        if (d > v.r + u.radius) continue;
-        u.held = true;
-        if (u.state === 'windup') this.interrupt(u);
-        // 以稳定速度吸向中心（先抵消本步摩擦），越靠近中心越慢，避免来回穿过。
-        const n = normalize(dx, dy);
-        const falloff = clamp(d / 60, 0.1, 1);
-        const speed = (tune.pullSpeed / Math.sqrt(u.mass)) * falloff + SIM.friction * dt;
-        u.vx = n.x * speed;
-        u.vy = n.y * speed;
-        if (!u.slide) u.slide = { team: 0, echo: 0, chain: v.chain, source: 'vortex' };
-      }
-      if (v.time >= v.duration) {
-        const burst = v.level >= 2;
-        if (burst) {
-          this.blasts.push({
-            x: v.x,
-            y: v.y,
-            radius: v.r * 0.75,
-            damage: tune.burstDamage,
-            knock: tune.burstKnock,
-            delay: 0,
-            team: 0,
-            echo: 0,
-            chain: v.chain,
-            source: 'vortex',
-            hitsAll: false,
-            ignoreId: 0,
-          });
-        }
-        this.emit({ type: 'vortexEnd', x: v.x, y: v.y, burst });
-      }
-    }
-    this.vortexes = this.vortexes.filter((v) => v.time < v.duration);
-  }
-
-  private updateLobs(dt: number): void {
-    for (const lob of this.lobs) {
-      lob.time += dt;
-      if (lob.time < lob.duration) continue;
-      this.emit({ type: 'lobLand', x: lob.x, y: lob.y, radius: lob.r });
-      const chain = this.newChain();
-      for (const u of this.units) {
-        if (!u.alive || u.team !== 0) continue;
-        const d = dist(lob.x, lob.y, u.x, u.y);
-        if (d > lob.r + u.radius) continue;
-        const falloff = 1 - 0.4 * clamp(d / lob.r, 0, 1);
-        this.damage(u, lob.damage * falloff, {
-          team: 1,
-          source: 'enemy',
-          echo: 0,
-          chain,
-          attackerKind: 'mortar',
-        });
-        const n = normalize(u.x - lob.x, u.y - lob.y, 1, 0);
-        this.knock(u, n.x, n.y, lob.knock * falloff, {
-          team: 1,
-          echo: 0,
-          chain,
-          source: 'enemy',
-        });
-      }
-    }
-    this.lobs = this.lobs.filter((lob) => lob.time < lob.duration);
-  }
-
-  private updateBlasts(dt: number): void {
-    if (this.blasts.length === 0) return;
-    const ready: PendingBlast[] = [];
-    const waiting: PendingBlast[] = [];
-    for (const b of this.blasts) {
-      b.delay -= dt;
-      (b.delay <= 0 ? ready : waiting).push(b);
-    }
-    this.blasts = waiting;
-    for (const b of ready) this.explode(b);
-  }
-
   private compact(): void {
-    // 倒下超过 3 秒的对手移出列表，保持遍历成本稳定；我方队员始终保留（界面要显示）。
-    this.units = this.units.filter((u) => u.alive || u.team === 0 || this.t - u.diedAt < 3);
+    // 倒下超过 3 秒的对手移出列表，保持遍历成本稳定；玩家宠物始终保留（界面要显示）。
+    const keep = this.units.filter((u) => u.alive || u.team === 0 || this.t - u.diedAt < 3);
+    if (keep.length === this.units.length) return;
+    this.units = keep;
+    this.byId = new Map(keep.map((u) => [u.id, u]));
   }
 
   private checkResult(): void {
     if (this.result) return;
     const enemiesAlive = this.units.some((u) => u.alive && u.team === 1);
     const playersAlive = this.units.some((u) => u.alive && u.team === 0);
-    if (!enemiesAlive && this.waves.length === 0) this.finish('win');
+    if (!enemiesAlive) this.finish('win');
     else if (!playersAlive) this.finish('lose');
     else if (this.t >= SIM.timeLimit) {
       this.stats.timeout = true;
@@ -370,33 +261,78 @@ export class World {
     this.emit({ type: 'end', result });
   }
 
-  /** 剩余对手生命占比（含尚未出场的波次），失败结算用。 */
-  enemyHpRemainingRatio(): number {
-    let remaining = 0;
-    for (const u of this.units) if (u.alive && u.team === 1) remaining += u.hp;
-    for (const wave of this.waves) {
-      for (const e of wave.units) remaining += unitDef(e.kind).hp * this.enemyHpMult;
-    }
-    let total = this.stats.enemyTotalHp;
-    for (const wave of this.waves) {
-      for (const e of wave.units) total += unitDef(e.kind).hp * this.enemyHpMult;
-    }
-    return total > 0 ? remaining / total : 0;
+  // ---- 出场 ----
+
+  /** 让一只宠物出场；uid 只有玩家宠物有。 */
+  spawnPet(
+    species: SpeciesId,
+    form: Form,
+    team: Team,
+    x: number,
+    y: number,
+    uid = 0,
+    summonedBy = 0,
+  ): Unit {
+    const def = SPECIES[species];
+    const st = formStats(species, form);
+    const enemy = team === 1;
+    const hp = Math.round(st.hp * (enemy ? this.enemyHpMult : 1));
+    const u = this.makeUnit(team, species, form, x, y, st.radius);
+    u.uid = uid;
+    u.element = def.element;
+    u.role = def.role;
+    u.hp = hp;
+    u.maxHp = hp;
+    u.mass = st.mass;
+    u.atk = st.atk * (enemy ? this.enemyDamageMult : 1);
+    u.interval = st.interval;
+    u.range = st.range;
+    u.speed = st.speed;
+    u.energy = form === 3 ? ENERGY.start : -1;
+    u.skillCdMax = def.skill.cooldown;
+    u.skillCd = def.skill.cooldown * u.rng.range(0.4, 0.7);
+    u.summonedBy = summonedBy;
+    return this.register(u);
   }
 
-  // ---- 基本动作 ----
+  spawnBoss(x: number, y: number): Unit {
+    const st = DRAGON.stats[0];
+    const hp = Math.round(st.hp * this.enemyHpMult);
+    const u = this.makeUnit(1, 'dragon', 1, x, y, st.radius);
+    u.element = DRAGON.element;
+    u.role = 'boss';
+    u.hp = hp;
+    u.maxHp = hp;
+    u.mass = st.mass;
+    u.atk = st.atk * this.enemyDamageMult;
+    u.interval = st.interval;
+    u.range = st.range;
+    u.speed = st.speed;
+    u.energy = -1;
+    u.breathCd = 3;
+    u.tailCd = 5;
+    u.summonCd = 9;
+    return this.register(u);
+  }
 
-  spawnUnit(kind: UnitKind, x: number, y: number, announce: boolean, spawnedBy = 0): Unit {
-    const def = unitDef(kind);
-    let hp = def.hp;
-    if (def.team === 1) hp *= this.enemyHpMult;
-    if (kind === 'guard' && this.level('bulwark') > 0) hp *= 1 + MODULE_TUNING.bulwark.hpBonus;
-    hp = Math.round(hp);
-    const unit: Unit = {
+  private makeUnit(
+    team: Team,
+    species: SpeciesId | BossId,
+    form: Form,
+    x: number,
+    y: number,
+    radius: number,
+  ): Unit {
+    const index = this.spawnCount++;
+    return {
       id: this.nextId++,
-      kind,
-      def,
-      team: def.team,
+      uid: 0,
+      team,
+      species,
+      form,
+      element: 'fire',
+      role: 'tank',
+      name: formName(species, form),
       x,
       y,
       px: x,
@@ -405,110 +341,200 @@ export class World {
       vy: 0,
       mvx: 0,
       mvy: 0,
-      facing: def.team === 0 ? 0 : Math.PI,
-      hp,
-      maxHp: hp,
-      radius: def.radius,
-      mass: def.mass,
-      speed: def.speed,
+      facing: team === 0 ? 0 : Math.PI,
+      radius,
+      mass: 1,
+      hp: 1,
+      maxHp: 1,
+      shield: 0,
+      shieldTime: 0,
+      energy: -1,
       alive: true,
       diedAt: 0,
-      state: 'idle',
-      stateTime: 0,
-      cooldown: def.team === 1 ? def.cooldown * 0.5 : 0,
+      act: 'idle',
+      actAt: this.t,
+      actDur: 0,
       targetId: 0,
-      aimX: x,
-      aimY: y,
       stun: 0,
+      airborne: 0,
+      root: 0,
+      burn: 0,
+      burnDps: 0,
+      burnBy: 0,
+      burnSource: 'basic',
+      burnTick: SIM.dotTick,
+      taunt: 0,
+      tauntBy: 0,
+      guard: 0,
+      stoneSkin: 0,
+      hitAt: -9,
+      spawnAt: this.t,
+      atk: 1,
+      interval: 1,
+      range: 18,
+      speed: 60,
+      attackCd: 0,
+      skillCd: 0,
+      skillCdMax: 0,
+      breathCd: 0,
+      tailCd: 0,
+      summonCd: 0,
+      action: null,
       slide: null,
       impactCooldown: 0,
-      tauntBy: 0,
-      tauntTime: 0,
-      resonance: 0,
-      shieldHp: 0,
-      shieldTime: 0,
-      held: false,
-      rng: new Rng(hashSeed(this.config.seed, this.config.encounter.id, 'unit', this.spawnCount++)),
-      shots: 0,
-      timerA: kind === 'jack' ? 1.5 : 2,
-      timerB: 0,
-      timerC: 0,
-      phase: kind === 'king' ? 1 : 0,
-      pending: '',
-      spawnedBy,
-      active: def.team === 0 ? activeFor(kind as PlayerUnitKind, this.config.loadout) : null,
-      activeCd: 0,
-      dashX: 0,
-      dashY: 0,
-      dashLeft: 0,
-      dashHits: [],
-      dashChain: 0,
-      hitAt: -9,
-      attackAt: -9,
-      blockAt: -9,
-      healAt: -9,
-      castAt: -9,
+      summonedBy: 0,
+      energyAnnounced: false,
+      retargetAt: 0,
+      kiteTime: 0,
+      spread: 0,
+      slot: team === 0 ? Math.PI : 0,
+      footwork: 'none',
+      foot: null,
+      flank: 1,
+      weavePhase: 0,
+      weaveFreq: 1,
+      crossAt: 0,
+      strafeDir: 1,
+      strafeSwitchAt: 0,
+      holdFactor: 0.8,
+      rng: new Rng(hashSeed(this.config.seed, this.config.encounter.id, 'unit', index)),
     };
-    if (kind === 'guard') unit.timerA = MODULE_TUNING.bulwark.tauntInterval * 0.5;
-    this.units.push(unit);
-    if (unit.team === 1) {
+  }
+
+  private register(u: Unit): Unit {
+    // 出场时定下各自的走位习惯：偏好的包抄一侧、迂回的节奏、远程保持的距离。
+    // 同一目标周围的近战因此各占一个方向，接近时也不会排成一队。
+    const rng = u.rng;
+    u.flank = rng.next() < 0.5 ? -1 : 1;
+    u.spread = rng.range(0.2, 1);
+    u.weavePhase = rng.range(0, Math.PI * 2);
+    u.weaveFreq = rng.range(1.6, 2.8);
+    u.crossAt = this.t + rng.range(3, 6);
+    u.strafeDir = rng.next() < 0.5 ? -1 : 1;
+    u.strafeSwitchAt = this.t + rng.range(1, 2);
+    u.holdFactor = rng.range(0.7, 0.9);
+    u.attackCd = rng.range(0, 0.4);
+    this.units.push(u);
+    this.byId.set(u.id, u);
+    this.seeForm(formId(u.species, u.form));
+    if (u.team === 1) {
       this.stats.enemyCount++;
-      this.stats.enemyTotalHp += unit.maxHp;
-      if (kind === 'snail' && !this.stats.healerKinds.includes('snail')) {
-        this.stats.healerKinds.push('snail');
-      }
+      this.stats.enemyTotalHp += u.maxHp;
     }
-    if (announce) this.emit({ type: 'spawn', unitId: unit.id, kind, x, y });
-    return unit;
+    return u;
+  }
+
+  private seeForm(id: string): void {
+    if (!this.formsSeen.includes(id)) this.formsSeen.push(id);
+  }
+
+  /** 首领化为人形：体型变小、更快，获得能量与大招。 */
+  transformBoss(u: Unit): void {
+    const st = DRAGON.stats[1];
+    u.form = 2;
+    u.name = formName('dragon', 2);
+    u.radius = st.radius;
+    u.mass = st.mass;
+    u.speed = st.speed;
+    u.interval = st.interval;
+    u.range = st.range;
+    u.atk = st.atk * this.enemyDamageMult;
+    u.energy = ENERGY.start;
+    u.energyAnnounced = false;
+    u.stun = 0;
+    u.airborne = 0;
+    u.root = 0;
+    u.burn = 0;
+    u.summonCd = Math.max(u.summonCd, 6);
+    this.seeForm(formId('dragon', 2));
+    this.emit({ type: 'transform', unitId: u.id });
+  }
+
+  // ---- 伤害、治疗与状态 ----
+
+  /** 受到的伤害倍率：玄甲、石肤、我方水墙。 */
+  reductionOf(u: Unit): number {
+    let mult = 1;
+    if (u.guard > 0) mult *= 1 - SKILLS.turtle.skill.reduction;
+    if (u.stoneSkin > 0) mult *= 1 - SKILLS.bear.ult.skin;
+    if (this.zones.some((z) => z.kind === 'waterWall' && z.team === u.team)) {
+      mult *= 1 - SKILLS.turtle.ult.reduction;
+    }
+    return mult;
   }
 
   damage(target: Unit, base: number, info: DamageInfo): number {
     if (!target.alive || base <= 0) return 0;
+    // 变身过程中不会受伤。
+    if (target.action?.kind === 'transform') return 0;
     const echo = Math.min(info.echo, SIM.echoCap);
-    let amount = base * (1 + SIM.echoBonus * echo);
-    if (echo > 0 && target.resonance > 0) amount *= 1 + MODULE_TUNING.magnet.resonance;
-    if (info.team === 1 && target.team === 0) amount *= this.enemyDamageMult;
-    if (target.kind === 'king' && target.state === 'stunned') amount *= 1.5;
-    amount *= this.overtimeMult();
+    const counter = counterSign(info.element, target.element);
+    let amount = base * counterMult(info.element, target.element);
+    amount *= (1 + SIM.echoBonus * echo) * this.overtimeMult() * this.reductionOf(target);
 
-    if (target.shieldHp > 0) {
-      const absorbed = Math.min(target.shieldHp, amount);
-      target.shieldHp -= absorbed;
+    if (target.shield > 0) {
+      const absorbed = Math.min(target.shield, amount);
+      target.shield -= absorbed;
       amount -= absorbed;
-    }
-    amount = Math.min(amount, target.hp);
-    target.hp -= amount;
-    target.hitAt = this.t;
-
-    if (!this.result) {
-      if (target.team === 1) {
-        if (info.team === 0) {
-          addTo(this.stats.damageBySource, info.source, amount);
-          const owner = SOURCE_OWNER[info.source];
-          if (owner) this.stats.damageDealtByUnit[owner] += amount;
-          if (echo > 0) this.stats.echoHits++;
-        } else {
-          this.stats.enemyFriendlyFire += amount;
-        }
-      } else if (target.kind === 'guard' || target.kind === 'slinger' || target.kind === 'bell') {
-        this.stats.damageTakenByUnit[target.kind] += amount;
+      if (target.shield <= 0.001) {
+        target.shield = 0;
+        target.shieldTime = 0;
       }
     }
+    let floor = 0;
+    if (target.species === 'dragon' && target.form === 1) floor = target.maxHp * BOSS_FLOOR;
+    amount = Math.max(0, Math.min(amount, target.hp - floor));
+    target.hp -= amount;
+    target.hitAt = this.t;
+    if (amount > 0) this.gainEnergy(target, (amount / target.maxHp) * ENERGY.perDamageTaken);
+    if (!this.result) this.recordDamage(target, amount, info, echo, counter);
 
     const killed = target.hp <= 0.001;
     this.emit({
       type: 'hit',
       targetId: target.id,
+      sourceId: info.sourceId,
       x: target.x,
       y: target.y,
       amount,
       echo,
       team: info.team,
-      source: info.source,
+      element: info.element,
+      counter,
       killed,
+      source: info.source,
+      dot: info.dot ?? false,
     });
     if (killed) this.kill(target, info);
     return amount;
+  }
+
+  private recordDamage(
+    target: Unit,
+    amount: number,
+    info: DamageInfo,
+    echo: number,
+    counter: 1 | 0 | -1,
+  ): void {
+    const s = this.stats;
+    if (info.team === 0 && target.team === 1) {
+      s.totalDealt += amount;
+      addTo(s.damageBySkill, info.source, amount);
+      const uid = this.unitById(info.sourceId)?.uid ?? 0;
+      if (uid) addTo(s.damageByUid, uid, amount);
+      if (echo > 0) s.echoHits++;
+      if (counter === 1) {
+        s.counterHits++;
+        s.counterBonus += amount - amount / COUNTER_BONUS;
+      } else if (counter === -1) {
+        s.counteredHits++;
+        s.counteredLoss += amount / COUNTERED_MULT - amount;
+      }
+    } else if (target.team === 0 && info.team === 1) {
+      s.totalTaken += amount;
+      addTo(s.takenByUid, target.uid, amount);
+      if (counter === 1) s.enemyCounterBonus += amount - amount / COUNTER_BONUS;
+    }
   }
 
   kill(target: Unit, info: DamageInfo): void {
@@ -516,100 +542,187 @@ export class World {
     target.alive = false;
     target.hp = 0;
     target.diedAt = this.t;
-    target.state = 'idle';
+    target.action = null;
     target.slide = null;
     target.vx = 0;
     target.vy = 0;
-    target.held = false;
-    if (this.focusId === target.id) this.focusId = 0;
+    target.stun = 0;
+    target.airborne = 0;
+    target.root = 0;
+    target.burn = 0;
+    target.shield = 0;
+    target.guard = 0;
+    target.foot = null;
+    target.footwork = 'none';
+    target.mvx = 0;
+    target.mvy = 0;
+    this.setAct(target, 'dead', 0);
+    if (this.focusId === target.id) {
+      this.focusId = 0;
+      this.emit({ type: 'focus', unitId: 0 });
+    }
 
     if (!this.result) {
+      const killer = this.unitById(info.sourceId);
       const record = {
-        kind: target.kind,
+        uid: target.uid,
+        species: target.species,
+        form: target.form,
+        team: target.team,
         time: this.t,
-        by: info.team === 1 ? (info.attackerKind ?? info.source) : info.source,
+        bySpecies: killer ? killer.species : null,
+        byForm: killer ? killer.form : 0,
+        source: info.source,
       };
       if (target.team === 0) this.stats.playerDeaths.push(record);
       else {
         this.stats.enemyDeaths.push(record);
-        if (info.team === 0) addTo(this.stats.killsBySource, info.source, 1);
+        if (info.team === 0 && killer?.uid) addTo(this.stats.killsByUid, killer.uid, 1);
       }
     }
     this.emit({
       type: 'death',
       unitId: target.id,
-      kind: target.kind,
+      species: target.species,
+      form: target.form,
       team: target.team,
       x: target.x,
       y: target.y,
     });
 
-    if (target.kind === 'bomber') {
-      const byPlayer = info.team === 0;
-      const def = target.def;
-      this.blasts.push({
-        x: target.x,
-        y: target.y,
-        radius: 75,
-        damage: def.damage,
-        knock: def.knock,
-        delay: byPlayer ? 0.1 : 0,
-        team: byPlayer ? 0 : 1,
-        echo: byPlayer ? info.echo + 1 : 0,
-        chain: info.chain,
-        source: byPlayer ? 'detonate' : 'enemy',
-        hitsAll: true,
-        ignoreId: target.id,
-      });
-      return;
-    }
-
-    const burst = this.level('burst');
-    if (target.team === 1 && info.team === 0 && burst > 0 && (burst >= 2 || info.echo >= 1)) {
-      const tune = MODULE_TUNING.burst;
-      this.blasts.push({
-        x: target.x,
-        y: target.y,
-        radius: burst >= 2 ? tune.radiusLv2 : tune.radiusLv1,
-        damage: tune.damage,
-        knock: tune.knock,
-        delay: 0.14,
-        team: 0,
-        echo: info.echo + 1,
-        chain: info.chain,
-        source: 'burst',
-        hitsAll: false,
-        ignoreId: target.id,
-      });
+    // 连环爆炸：被凤凰陨击倒的敌人原地爆开，炸倒的下一个敌人接着爆（每次回响 +1）。
+    const burst = info.burst;
+    if (burst && target.team !== info.team) {
+      const x = target.x;
+      const y = target.y;
+      this.after(0.12, () =>
+        this.blast({
+          x,
+          y,
+          radius: burst.radius,
+          damage: burst.damage,
+          team: info.team,
+          sourceId: info.sourceId,
+          source: info.source,
+          element: info.element,
+          echo: Math.min(SIM.echoCap, info.echo + 1),
+          chain: info.chain,
+          burst,
+          ignoreId: target.id,
+          transfer: true,
+        }),
+      );
     }
   }
 
-  heal(target: Unit, amount: number, fromX: number, fromY: number): number {
+  heal(target: Unit, amount: number, sourceId: number): number {
     if (!target.alive || amount <= 0) return 0;
     const actual = Math.min(amount, target.maxHp - target.hp);
     if (actual <= 0) return 0;
     target.hp += actual;
-    target.healAt = this.t;
     if (!this.result) {
-      if (target.team === 1) this.stats.enemyHealing += actual;
-      else this.stats.playerHealing += actual;
+      if (target.team === 0) {
+        this.stats.playerHealing += actual;
+        const uid = this.unitById(sourceId)?.uid ?? 0;
+        if (uid) addTo(this.stats.healingByUid, uid, actual);
+      } else {
+        this.stats.enemyHealing += actual;
+      }
     }
     this.emit({
       type: 'heal',
       targetId: target.id,
-      fromX,
-      fromY,
+      sourceId,
+      amount: actual,
       x: target.x,
       y: target.y,
-      amount: actual,
     });
     return actual;
   }
 
-  /** 击退：速度变化与质量的平方根成反比；高速滑行期间不能行动。 */
+  /** 泡泡护盾：取较大的护盾量并刷新时长。 */
+  addShield(target: Unit, amount: number, duration: number, sourceId: number): void {
+    if (!target.alive || amount <= 0) return;
+    const gained = Math.max(0, amount - target.shield);
+    target.shield = Math.max(target.shield, amount);
+    target.shieldTime = Math.max(target.shieldTime, duration);
+    if (!this.result && target.team === 0) {
+      const uid = this.unitById(sourceId)?.uid ?? 0;
+      if (uid) addTo(this.stats.shieldByUid, uid, gained);
+    }
+    this.emit({ type: 'shield', targetId: target.id, amount: target.shield });
+    this.emitStatus(target, 'shield', duration);
+  }
+
+  gainEnergy(u: Unit, amount: number): void {
+    if (!u.alive || u.energy < 0 || amount <= 0) return;
+    if (u.action?.act === 'ult') return;
+    u.energy = Math.min(ENERGY.full, u.energy + amount);
+    if (u.energy >= ENERGY.full && !u.energyAnnounced) {
+      u.energyAnnounced = true;
+      this.emit({ type: 'energyFull', unitId: u.id });
+    }
+  }
+
+  /** 正在放大招或变身的单位不会被打断。 */
+  unstoppable(u: Unit): boolean {
+    return u.action !== null && u.action.unstoppable;
+  }
+
+  /** 打断正在进行的前摇或冲刺（大招与变身除外）。被打断的技能很快会再放。 */
+  interrupt(u: Unit): void {
+    u.foot = null;
+    const a = u.action;
+    if (!a || a.unstoppable) return;
+    if (a.kind !== 'basic' && a.kind !== 'heal' && a.phase === 0) {
+      u.skillCd = Math.min(u.skillCd, 1);
+    }
+    u.action = null;
+  }
+
+  stunUnit(u: Unit, duration: number, knockUp = false): void {
+    if (!u.alive || duration <= 0 || this.unstoppable(u)) return;
+    const d = u.role === 'boss' ? duration * BOSS_CC_MULT : duration;
+    u.stun = Math.max(u.stun, d);
+    if (knockUp) u.airborne = Math.max(u.airborne, d);
+    this.interrupt(u);
+    this.emitStatus(u, knockUp ? 'knockup' : 'stun', d);
+  }
+
+  rootUnit(u: Unit, duration: number): void {
+    if (!u.alive || duration <= 0) return;
+    const d = u.role === 'boss' ? duration * BOSS_CC_MULT : duration;
+    u.root = Math.max(u.root, d);
+    this.emitStatus(u, 'root', d);
+  }
+
+  burnUnit(u: Unit, dps: number, duration: number, byId: number, source: DamageSource): void {
+    if (!u.alive || dps <= 0 || duration <= 0) return;
+    if (u.burn <= 0 || dps >= u.burnDps) {
+      u.burnDps = dps;
+      u.burnBy = byId;
+      u.burnSource = source;
+    }
+    if (u.burn <= 0) u.burnTick = SIM.dotTick;
+    u.burn = Math.max(u.burn, duration);
+    this.emitStatus(u, 'burn', duration);
+  }
+
+  tauntUnit(u: Unit, byId: number, duration: number): void {
+    if (!u.alive || u.role === 'boss' || this.unstoppable(u)) return;
+    u.tauntBy = byId;
+    u.taunt = Math.max(u.taunt, duration);
+    u.targetId = byId;
+    this.emitStatus(u, 'taunt', duration);
+  }
+
+  emitStatus(u: Unit, status: StatusKind, duration: number): void {
+    this.emit({ type: 'status', unitId: u.id, status, duration });
+  }
+
+  /** 击退：速度变化与质量的平方根成反比；高速滑行期间不能行动，撞到东西会产生撞击。 */
   knock(target: Unit, dx: number, dy: number, power: number, info: SlideInfo): void {
-    if (!target.alive || target.def.immovable || power <= 0) return;
-    if (target.kind === 'guard' && this.level('bulwark') > 0) return;
+    if (!target.alive || power <= 0 || this.unstoppable(target)) return;
     const dv = power / Math.sqrt(target.mass);
     target.vx += dx * dv;
     target.vy += dy * dv;
@@ -620,58 +733,64 @@ export class World {
     }
     if (speed > SIM.slideSpeed) {
       target.slide = { ...info };
-      if (target.state === 'windup' || target.state === 'fuse') this.interrupt(target);
-    }
-    // 被重重撞到会打转：朝向被打乱，正面的盾牌暂时转开。
-    if (dv > 180 && target.team === 1) {
-      const spin = Math.min(1.4, dv / 500) * (target.rng.next() < 0.5 ? -1 : 1);
-      target.facing += spin;
+      this.interrupt(target);
     }
   }
 
-  /** 打断蓄力（被击飞、被吸住）。爆爆虫的引信不会被打断。 */
-  interrupt(u: Unit): void {
-    if (u.state === 'fuse') return;
-    if (u.state === 'windup') {
-      u.state = 'idle';
-      u.pending = '';
-      u.cooldown = Math.max(u.cooldown, 0.35);
-    }
-  }
-
-  explode(b: PendingBlast): void {
+  /** 爆炸：伤害范围内的对手（中心伤害最高），可附带击退、眩晕、击飞、灼烧。返回波及的单位数。 */
+  blast(b: BlastSpec): number {
     this.emit({
       type: 'explode',
       x: b.x,
       y: b.y,
       radius: b.radius,
-      echo: b.echo,
+      element: b.element,
+      echo: Math.min(b.echo, SIM.echoCap),
       team: b.team,
       source: b.source,
     });
-    if (!this.result && b.team === 0) this.stats.blasts++;
-    if (b.echo > 0) this.echoEvent(b.x, b.y, b.echo, b.chain, b.source, b.team);
-    const targets = this.units.filter((u) => u.alive && u.id !== b.ignoreId);
+    if (b.transfer && b.echo > 0) {
+      if (!this.result && b.team === 0) this.stats.blasts++;
+      this.echoEvent(b.x, b.y, b.echo, b.chain, b.source, b.team);
+    }
+    const targets = this.units.filter(
+      (u) =>
+        u.alive &&
+        u.team !== b.team &&
+        u.id !== b.ignoreId &&
+        dist(b.x, b.y, u.x, u.y) <= b.radius + u.radius,
+    );
     for (const u of targets) {
-      if (!b.hitsAll && u.team === b.team) continue;
       const d = dist(b.x, b.y, u.x, u.y);
-      if (d > b.radius + u.radius) continue;
-      const falloff = 1 - 0.45 * clamp(d / b.radius, 0, 1);
+      const falloff = 1 - 0.35 * clamp(d / Math.max(1, b.radius), 0, 1);
       this.damage(u, b.damage * falloff, {
         team: b.team,
+        sourceId: b.sourceId,
         source: b.source,
+        element: b.element,
         echo: b.echo,
         chain: b.chain,
-        attackerKind: b.source === 'enemy' ? 'bomber' : undefined,
+        burst: b.burst ?? null,
       });
-      const n = normalize(u.x - b.x, u.y - b.y, u.team === 0 ? -1 : 1, 0);
-      this.knock(u, n.x, n.y, b.knock * falloff, {
-        team: b.team,
-        echo: b.echo,
-        chain: b.chain,
-        source: b.source,
-      });
+      if (!u.alive) continue;
+      if (b.burnDps && b.burnTime) this.burnUnit(u, b.burnDps, b.burnTime, b.sourceId, b.source);
+      if (b.knockUp) this.stunUnit(u, b.knockUp, true);
+      else if (b.stun) this.stunUnit(u, b.stun);
+      if (b.knock) {
+        const n = normalize(u.x - b.x, u.y - b.y, u.team === 0 ? -1 : 1, 0);
+        const owner = this.unitById(b.sourceId);
+        this.knock(u, n.x, n.y, b.knock * falloff, {
+          team: b.team,
+          ownerId: b.sourceId,
+          echo: b.echo,
+          chain: b.chain,
+          source: b.source,
+          power: owner?.atk ?? 10,
+          element: b.element,
+        });
+      }
     }
+    return targets.length;
   }
 
   /** 记录一次回响（等级提升），并更新本场最长回响链。 */
@@ -683,151 +802,137 @@ export class World {
     source: DamageSource,
     team: Team,
   ): void {
-    this.emit({ type: 'echo', x, y, level, chain, source });
+    const capped = Math.min(level, SIM.echoCap);
+    this.emit({ type: 'echo', x, y, level: capped, chain, source });
     if (team !== 0) return;
     const info = this.chainInfo.get(chain) ?? { max: 0, sources: [] };
     if (info.sources[info.sources.length - 1] !== source && info.sources.length < 12) {
       info.sources.push(source);
     }
-    info.max = Math.max(info.max, level);
+    info.max = Math.max(info.max, capped);
     this.chainInfo.set(chain, info);
-    if (!this.result && level > this.stats.maxEcho) {
-      this.stats.maxEcho = level;
+    if (!this.result && capped > this.stats.maxEcho) {
+      this.stats.maxEcho = capped;
       this.stats.bestChainSources = info.sources.slice();
     }
   }
 
-  // ---- 玩家输入 ----
-
-  /** 发动某名队员装备的主动招式。成功返回 true。 */
-  castActive(kind: PlayerUnitKind, x: number, y: number): boolean {
-    const u = this.playerUnit(kind);
-    if (!u || !u.alive || !u.active || u.activeCd > 0 || this.result) return false;
-    if (u.slide || u.stun > 0 || u.state === 'dash') return false;
-    const module = u.active;
-    const def = MODULE_DEFS[module];
-    const tx = clamp(x, 10, this.width - 10);
-    const ty = clamp(y, 10, this.height - 10);
-    const level = this.level(module);
-
-    if (module === 'charge') {
-      const tune = MODULE_TUNING.charge;
-      const dir = normalize(tx - u.x, ty - u.y, 1, 0);
-      const len = Math.min(dist(u.x, u.y, tx, ty), tune.maxDistance);
-      if (len < 20) return false;
-      u.state = 'dash';
-      u.dashX = dir.x;
-      u.dashY = dir.y;
-      u.dashLeft = len;
-      u.dashHits = [];
-      u.dashChain = this.newChain();
-      u.facing = Math.atan2(dir.y, dir.x);
-    } else if (module === 'pierce') {
-      const tune = MODULE_TUNING.pierce;
-      const dir = normalize(tx - u.x, ty - u.y, 1, 0);
-      u.facing = Math.atan2(dir.y, dir.x);
-      this.spawnProjectile({
-        kind: 'bigshot',
-        team: 0,
-        x: u.x + dir.x * (u.radius + 4),
-        y: u.y + dir.y * (u.radius + 4),
-        vx: dir.x * tune.speed,
-        vy: dir.y * tune.speed,
-        radius: tune.radius,
-        damage: tune.damage,
-        knock: tune.knock,
-        ownerId: u.id,
-        source: 'pierce',
-        pierce: 99,
-        wallBounce: level >= 2 ? 1 : 0,
-        life: 3,
-      });
-      this.emit({ type: 'shoot', unitId: u.id, x: u.x, y: u.y, angle: u.facing, big: true });
-    } else if (module === 'vortex') {
-      const tune = MODULE_TUNING.vortex;
-      this.vortexes.push({
-        id: this.nextId++,
-        x: tx,
-        y: ty,
-        r: tune.radius,
-        time: 0,
-        duration: tune.duration,
-        level,
-        chain: this.newChain(),
-      });
-    } else {
-      return false;
+  setAct(u: Unit, act: UnitAct, duration: number, restart = false): void {
+    if (u.act !== act || restart) {
+      u.act = act;
+      u.actAt = this.t;
     }
-
-    u.activeCd = def.cooldown ?? 10;
-    u.castAt = this.t;
-    addTo(this.stats.activesUsed, module, 1);
-    this.emit({ type: 'cast', unitId: u.id, module, x: tx, y: ty });
-    return true;
+    u.actDur = duration;
   }
 
-  /** 点选敌人作为集火目标（阿铁与小弹优先攻击它）；传 0 取消。 */
-  setFocus(id: number): void {
-    const target = id ? this.unitById(id) : undefined;
-    if (id && (!target || !target.alive || target.team !== 1)) return;
-    if (id && id !== this.focusId) this.stats.focusUsed++;
-    this.focusId = id;
-    this.emit({ type: 'focus', unitId: id });
-  }
+  // ---- 弹丸与区域 ----
 
   spawnProjectile(
-    init: Partial<Projectile> & Pick<Projectile, 'kind' | 'team' | 'x' | 'y' | 'vx' | 'vy'>,
+    init: Partial<Projectile> &
+      Pick<Projectile, 'kind' | 'team' | 'x' | 'y' | 'vx' | 'vy' | 'element' | 'damage'>,
   ): Projectile {
     const p: Projectile = {
       id: this.nextId++,
       px: init.x,
       py: init.y,
-      radius: 5,
-      damage: 10,
-      knock: 0,
+      z: 0,
       echo: 0,
-      chain: this.newChain(),
+      alive: true,
+      radius: 6,
       ownerId: 0,
-      source: init.team === 0 ? 'slinger' : 'enemy',
+      shooterId: init.ownerId ?? 0,
+      source: 'basic',
+      chain: this.newChain(),
       hitIds: [],
       ricochet: 0,
-      ricochetRange: 260,
-      wallBounce: 0,
-      homing: false,
-      seekId: 0,
-      seekTurn: 0,
+      ricochetRange: 240,
       pierce: 0,
       reflects: 0,
       life: 2.5,
-      alive: true,
+      blastAtEnd: false,
+      seekId: 0,
+      seekTurn: 0,
+      splash: 0,
+      knock: 0,
+      burnDps: 0,
+      burnTime: 0,
+      groundDps: 0,
+      groundTime: 0,
+      shards: 0,
+      shardDamage: 0,
+      shardSpeed: 500,
+      shardRange: 260,
+      stun: 0,
+      lob: false,
+      fromX: init.x,
+      fromY: init.y,
+      tx: init.x,
+      ty: init.y,
+      flight: 0,
+      t: 0,
+      peak: 0,
+      reflectable: true,
+      burst: null,
+      trailZoneId: 0,
       ...init,
     };
     if (this.projectiles.length >= SIM.maxProjectiles) {
       const oldest = this.projectiles.find((q) => q.alive);
       if (oldest) oldest.alive = false;
+      this.projectiles = this.projectiles.filter((q) => q.alive);
     }
     this.projectiles.push(p);
     return p;
   }
-}
 
-/** 从配置里取出已装备招式及其等级。 */
-export function equippedLevels(
-  loadout: Loadout,
-  levels: Partial<Record<ModuleId, ModuleLevel>>,
-): Partial<Record<ModuleId, ModuleLevel>> {
-  const out: Partial<Record<ModuleId, ModuleLevel>> = {};
-  for (const kind of PLAYER_UNITS) {
-    for (const id of loadout[kind]) {
-      if (id && levels[id]) out[id] = levels[id];
-    }
+  addZone(
+    init: Partial<Zone> &
+      Pick<Zone, 'kind' | 'team' | 'x' | 'y' | 'r' | 'duration' | 'ownerId' | 'source'>,
+  ): Zone {
+    const owner = this.unitById(init.ownerId);
+    const zone: Zone = {
+      id: this.nextId++,
+      t: 0,
+      element: owner?.element ?? 'fire',
+      chain: this.newChain(),
+      damage: 0,
+      tick: 0,
+      waves: 0,
+      root: 0,
+      pull: 0,
+      heal: 0,
+      reduction: 0,
+      ...init,
+    };
+    if (this.zones.length >= SIM.maxZones) this.zones.shift();
+    this.zones.push(zone);
+    this.emit({
+      type: 'zone',
+      zoneId: zone.id,
+      kind: zone.kind,
+      x: zone.x,
+      y: zone.y,
+      r: zone.r,
+      ...(zone.angle !== undefined ? { angle: zone.angle } : {}),
+      ...(zone.length !== undefined ? { length: zone.length } : {}),
+    });
+    return zone;
   }
-  return out;
-}
 
-function activeFor(kind: PlayerUnitKind, loadout: Loadout): ModuleId | null {
-  for (const id of loadout[kind]) {
-    if (id && MODULE_DEFS[id].type === 'active') return id;
+  // ---- 玩家输入 ----
+
+  /**
+   * 点选敌人作为集火目标：我方全体优先攻击它。再点同一个敌人或传 0 取消。
+   * 对手一方不理会集火。
+   */
+  setFocus(id: number): void {
+    if (this.result) return;
+    if (id === this.focusId) id = 0;
+    const target = id ? this.unitById(id) : undefined;
+    if (id && (!target || !target.alive || target.team !== 1)) return;
+    if (id) this.stats.focusUsed++;
+    this.focusId = id;
+    for (const u of this.units) if (u.team === 0) u.retargetAt = 0;
+    this.emit({ type: 'focus', unitId: id });
   }
-  return null;
 }

@@ -1,5 +1,11 @@
 // 存档管理：内存中保存完整存档，改动后延迟合并写入；关闭窗口前同步落盘。
-import { emptySave, parseSave, serializeSave, type SaveData } from '../core/run/save.js';
+import {
+  emptySave,
+  parseSave,
+  SAVE_VERSION,
+  serializeSave,
+  type SaveData,
+} from '../core/run/save.js';
 import { createSaveBackend, type SaveBackend } from '../platform/storage.js';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -9,6 +15,8 @@ export class Persistence {
   data: SaveData = emptySave();
   /** 读取时存档损坏或不可识别。 */
   recovered = false;
+  /** 旧版本（玩具小队玩法）存档里有进行中的一轮，新玩法无法沿用，读入时丢弃了。 */
+  droppedOldRun = false;
   status: SaveStatus = 'idle';
   onStatus: ((status: SaveStatus) => void) | null = null;
   private timer: number | null = null;
@@ -29,6 +37,7 @@ export class Persistence {
     }
     const parsed = parseSave(text);
     this.recovered = text !== null && parsed === null;
+    this.droppedOldRun = parsed !== null && hasOldRun(text);
     this.data = parsed ?? emptySave();
     window.addEventListener('pagehide', () => this.flushNow());
     window.addEventListener('beforeunload', () => this.flushNow());
@@ -86,5 +95,15 @@ export class Persistence {
   private setStatus(status: SaveStatus): void {
     this.status = status;
     this.onStatus?.(status);
+  }
+}
+
+/** 存档是旧版本格式，且里面有进行中的一轮。 */
+function hasOldRun(text: string | null): boolean {
+  try {
+    const raw = JSON.parse(text ?? 'null') as { version?: unknown; run?: unknown } | null;
+    return !!raw && Number(raw.version ?? 1) < SAVE_VERSION && !!raw.run;
+  } catch {
+    return false;
   }
 }
