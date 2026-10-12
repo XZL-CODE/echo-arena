@@ -53,6 +53,14 @@ function sign(file, version) {
     fail(`${path.basename(file)} 的签名核对出错：${error.message}`);
   }
   if (!ok) fail(`${path.basename(file)} 的签名用客户端内置的公钥核对不通过。`);
+  // 客户端还要求签名里的版本号与清单一致，用同一个函数读一遍
+  const trusted = parseSignature(signature).trustedComment;
+  const signed = core.signedVersion(trusted);
+  if (signed !== version) {
+    fail(
+      `${path.basename(file)} 的签名里读到的版本是 ${signed}（可信注释：${trusted}），应为 ${version}。`,
+    );
+  }
   return signature;
 }
 
@@ -67,8 +75,10 @@ function checkKey() {
   const signature = sign(file, '0.0.0');
   fs.rmSync(dir, { recursive: true, force: true });
   const keyId = parsePublicKey(core.PUBLIC_KEY).keyId.toString('hex');
-  console.log(`签名密钥与客户端内置的公钥是一对（key id ${keyId}）。`);
-  console.log(`可信注释：${JSON.stringify(parseSignature(signature).trustedComment)}`);
+  const trusted = JSON.stringify(parseSignature(signature).trustedComment);
+  console.log(
+    `::notice title=更新签名密钥::私钥与客户端内置的公钥是一对（key id ${keyId}），可信注释 ${trusted}`,
+  );
 }
 
 function release({ tag, artifacts, notes }) {

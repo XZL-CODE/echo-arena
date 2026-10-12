@@ -14,6 +14,7 @@ import {
 } from '../../src/core/run/save.js';
 
 interface Verifier {
+  trustedComment: string;
   update(chunk: Uint8Array): void;
   verify(): boolean;
 }
@@ -47,6 +48,7 @@ interface UpdateCore {
   macBundlePath(exe: string): string | null;
   platformKey(platform: string, arch: string): string;
   readManifest(manifest: unknown, current: string, key: string): Manifest | null;
+  signedVersion(trustedComment: string): string | null;
 }
 
 // 编译后位于 build/test/tests/unit，更新模块在仓库根目录的 electron/ 下。
@@ -70,7 +72,7 @@ function testKey() {
       const prehash = o.prehash ?? true;
       const message = prehash ? crypto.createHash('blake2b512').update(data).digest() : data;
       const signature = crypto.sign(null, message, privateKey);
-      const trusted = o.trusted ?? 'timestamp:1760000000\tfile:test.bin';
+      const trusted = o.trusted ?? 'timestamp:1760000000\tfile:test.bin\tversion:1.0.0';
       const global = crypto.sign(
         null,
         Buffer.concat([signature, Buffer.from(trusted)]),
@@ -108,10 +110,11 @@ test('minisign 签名：预哈希与旧式签名都能核对，内容、可信�
   assert.equal(minisign.verifyData(key.publicKey, key.sign(data), data), true);
   assert.equal(minisign.verifyData(key.publicKey, key.sign(data, { prehash: false }), data), true);
 
-  // 边下载边核对：分块喂入
+  // 边下载边核对：分块喂入；可信注释里带着签名时写进的版本号
   const verifier = minisign.createVerifier(key.publicKey, key.sign(data));
   for (let i = 0; i < data.length; i += 4096) verifier.update(data.subarray(i, i + 4096));
   assert.equal(verifier.verify(), true);
+  assert.equal(core.signedVersion(verifier.trustedComment), '1.0.0');
 
   const tampered = Buffer.from(data);
   tampered[1234] ^= 1;
@@ -133,6 +136,12 @@ test('客户端内置的公钥能解析，key id 与作者的密钥一致', () =
     core.FEED_URL,
     'https://github.com/XZL-CODE/echo-arena/releases/latest/download/latest.json',
   );
+});
+
+test('签名的可信注释里写进的版本号', () => {
+  assert.equal(core.signedVersion('timestamp:1760000000\tfile:a.dmg\tversion:0.6.0'), '0.6.0');
+  assert.equal(core.signedVersion('timestamp:1760000000\tfile:a.dmg'), null);
+  assert.equal(core.signedVersion(''), null);
 });
 
 test('版本比较按语义化版本', () => {

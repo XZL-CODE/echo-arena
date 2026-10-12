@@ -225,7 +225,7 @@ function parseSignature(value) {
 
 /**
  * 边收数据边核对：update() 喂文件内容，verify() 在收完后核对两层签名。
- * 签名与公钥对不上（key id 不同）时在创建时就报错。
+ * 签名与公钥对不上（key id 不同）时在创建时就报错。trustedComment 是签名覆盖的可信注释。
  */
 function createVerifier(publicKey, signature) {
   const pub = parsePublicKey(publicKey);
@@ -236,6 +236,7 @@ function createVerifier(publicKey, signature) {
   const hash = sig.prehashed ? new Blake2b512() : null;
   const chunks = [];
   return {
+    trustedComment: sig.trustedComment,
     update(chunk) {
       if (hash) hash.update(chunk);
       else chunks.push(Buffer.from(chunk));

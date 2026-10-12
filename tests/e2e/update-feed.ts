@@ -1,5 +1,5 @@
 // 测试用的更新源：本机 HTTP 服务提供 latest.json 与更新包，用一把测试密钥按 Tauri 的 minisign 格式签名
-// （minisign 文本再 base64 一层；ED 表示先对文件做 BLAKE2b-512 再签）。
+// （minisign 文本再 base64 一层；ED 表示先对文件做 BLAKE2b-512 再签；可信注释里写进版本号）。
 import crypto from 'node:crypto';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 export interface TestKey {
   /** 写给客户端的公钥（ECHO_ARENA_UPDATE_PUBKEY）。 */
   publicKey: string;
-  sign(data: Buffer, file?: string): string;
+  sign(data: Buffer, o?: { file?: string; version?: string }): string;
 }
 
 export function createTestKey(): TestKey {
@@ -19,10 +19,11 @@ export function createTestKey(): TestKey {
   const pub = Buffer.concat([Buffer.from('Ed'), keyId, raw]).toString('base64');
   return {
     publicKey: wrap(`untrusted comment: minisign public key: ${idText}\n${pub}\n`),
-    sign(data, file = 'update.bin') {
+    sign(data, { file = 'update.bin', version = '9.9.9' } = {}) {
       const hash = crypto.createHash('blake2b512').update(data).digest();
       const signature = crypto.sign(null, hash, privateKey);
-      const trusted = `timestamp:${Math.floor(Date.now() / 1000)}\tfile:${file}`;
+      const now = Math.floor(Date.now() / 1000);
+      const trusted = `timestamp:${now}\tfile:${file}\tversion:${version}`;
       const global = crypto.sign(
         null,
         Buffer.concat([signature, Buffer.from(trusted)]),
@@ -87,7 +88,7 @@ export async function startFeed(key: TestKey): Promise<Feed> {
     publish(o) {
       const entry = {
         url: `${base}/download/${encodeURIComponent(o.file)}`,
-        signature: o.signature ?? key.sign(o.data, o.file),
+        signature: o.signature ?? key.sign(o.data, { file: o.file, version: o.version }),
       };
       const manifest = {
         version: o.version,

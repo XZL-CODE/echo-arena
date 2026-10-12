@@ -88,6 +88,18 @@ function readManifest(manifest, current, key) {
 }
 
 /**
+ * 签名的可信注释里写进的版本号（发版时 Tauri 签名器的 --app-version）；没有时返回 null。
+ * 可信注释是“键:值”用制表符隔开，例如 timestamp:…\tfile:…\tversion:0.6.0。
+ */
+function signedVersion(trustedComment) {
+  for (const field of String(trustedComment ?? '').split('\t')) {
+    const colon = field.indexOf(':');
+    if (colon > 0 && /version/i.test(field.slice(0, colon))) return field.slice(colon + 1).trim();
+  }
+  return null;
+}
+
+/**
  * 更新说明取 Release 正文：去掉开头的“## vX 更新内容”标题（和弹窗标题重复），
  * 以及“## 安装说明”和之后的内容（给手动下载的人看的）。Windows 上拼出的正文可能是 CRLF。
  */
@@ -215,4 +227,5 @@ module.exports = {
   platformKey,
   readManifest,
   releaseBody,
+  signedVersion,
 };

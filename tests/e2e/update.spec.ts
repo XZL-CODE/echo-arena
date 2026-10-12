@@ -96,6 +96,26 @@ test('签名对不上的更新包不安装，可以重试', async () => {
   expect(errors).toEqual([]);
 });
 
+test('签名里的版本号和清单不一致时不安装（防止用旧版本的安装包冒充新版本）', async () => {
+  const data = crypto.randomBytes(1024 * 1024);
+  const file = 'EchoArena-9.9.9-test.bin';
+  feed.publish({
+    version: '9.9.9',
+    data,
+    file,
+    signature: key.sign(data, { file, version: '9.9.8' }),
+  });
+  const { app, page } = await launchClient({ env: updateEnv() });
+  const errors = await ready(page);
+  await page.click('[data-testid=update-badge]', { timeout: 30_000 });
+  await page.click('[data-testid=update-install]');
+  await expect(page.locator('[data-testid=update-error]')).toContainText('版本号', {
+    timeout: 60_000,
+  });
+  await app.close();
+  expect(errors).toEqual([]);
+});
+
 test('已是最新时不提示；一天内不再自动检查；设置里可以手动检查和关掉自动检查', async () => {
   feed.publish({ version: '0.0.1', data: Buffer.from('old'), file: 'old.bin' });
   const first = await launchClient({ env: updateEnv() });

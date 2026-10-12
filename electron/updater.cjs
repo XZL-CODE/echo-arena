@@ -192,6 +192,10 @@ function createUpdater({ getWindow }) {
       if (!verifier.verify()) {
         throw new Error('签名核对没通过：下载到的文件和发布的不一致，已删除，没有安装。');
       }
+      // 签名里写进的版本号要与清单一致：防止清单被改成用旧版本的安装包冒充新版本
+      if (core.signedVersion(verifier.trustedComment) !== update.version) {
+        throw new Error('签名里的版本号和更新清单不一致，已删除，没有安装。');
+      }
     } catch (error) {
       await fsp.rm(file, { force: true }).catch(() => {});
       if (controller.signal.aborted)
