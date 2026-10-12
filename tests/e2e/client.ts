@@ -55,18 +55,30 @@ export interface LaunchOptions {
   userData?: string;
   /** 打开测试钩子 window.__echo（快进、直接摆出对局等）。 */
   hooks?: boolean;
+  /** 额外的环境变量（更新测试用来指向本机的更新源）。 */
+  env?: Record<string, string>;
+  /** 启动这个可执行文件，而不是 ECHO_ARENA_EXECUTABLE 或源码。 */
+  executable?: string;
 }
 
 export async function launchClient(options: LaunchOptions = {}): Promise<Client> {
   const dir = options.userData ?? fs.mkdtempSync(path.join(os.tmpdir(), 'echo-arena-e2e-'));
-  const env = { ...process.env, ECHO_ARENA_USER_DATA: dir } as Record<string, string>;
+  // 默认不检查更新：测试不访问外部网络，也不让新版本提示打乱界面
+  const env = {
+    ...process.env,
+    ECHO_ARENA_USER_DATA: dir,
+    ECHO_ARENA_UPDATE_URL: 'off',
+    ...options.env,
+  } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
   if (options.hooks) env.ECHO_ARENA_TEST = '1';
   else delete env.ECHO_ARENA_TEST;
   const target = process.env.ECHO_ARENA_EXECUTABLE;
-  const app = target
-    ? await electron.launch({ executablePath: resolveExecutable(target), env })
-    : await electron.launch({ args: [ROOT], env });
+  const app = options.executable
+    ? await electron.launch({ executablePath: options.executable, env })
+    : target
+      ? await electron.launch({ executablePath: resolveExecutable(target), env })
+      : await electron.launch({ args: [ROOT], env });
   const page = await app.firstWindow();
   // 没有显卡的机器（CI）用软件渲染，首领战一帧要画一秒以上，一次点击要等好几帧才生效，
   // 默认 30 秒的操作时限不够

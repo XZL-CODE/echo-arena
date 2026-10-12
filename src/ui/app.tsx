@@ -61,6 +61,7 @@ import {
   type LessonContext,
 } from './guide-steps.js';
 import { uiIcon } from './icons.js';
+import { Updates } from './updates.js';
 import {
   ELEMENT_CSS,
   elementBadge,
@@ -121,6 +122,7 @@ export class App {
   readonly battle: BattleController;
   readonly showcase = new Showcase();
   readonly guide: Guide;
+  readonly updates: Updates;
   private readonly shell: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ui: HTMLElement;
@@ -187,6 +189,12 @@ export class App {
       onEvents: (events, world) => this.onBattleEvents(events, world),
       onEnd: (result, world) => this.onBattleEnd(result, world),
     };
+    this.updates = new Updates({
+      settings: () => this.settings,
+      updateSettings: (mutate) => this.updateSettings(mutate),
+      openModal: (node) => this.openModal(node),
+      closeModal: () => this.closeModal(),
+    });
     this.bindInput();
   }
 
@@ -220,6 +228,7 @@ export class App {
     }
     this.goTitle();
     requestAnimationFrame(this.loop);
+    void this.updates.start();
     document.body.dataset.ready = this.persistence.backend.kind;
     if (new URLSearchParams(location.search).get('test') === '1') this.installTestHooks();
   }
@@ -529,6 +538,7 @@ export class App {
             : null,
         ),
         h('div', { class: 'title-foot' }, `通关 ${this.persistence.data.records.runsCompleted} 次`),
+        this.updates.badge(),
       ),
     );
   }
@@ -1864,6 +1874,7 @@ export class App {
                 : null,
             ),
           ),
+          this.updates.settingsSection(() => this.openSettings(after)),
         ),
         actions: [
           button({ label: '完成', kind: 'primary', onClick: close, testId: 'settings-done' }),

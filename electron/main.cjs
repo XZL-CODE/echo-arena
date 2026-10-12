@@ -1,9 +1,10 @@
-// 回声竞技场桌面客户端：主进程。负责窗口、本地资源协议与存档读写。
+// 回声竞技场桌面客户端：主进程。负责窗口、本地资源协议、存档读写与自动更新。
 const { app, BrowserWindow, ipcMain, Menu, net, protocol, session, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { createSaveStore } = require('./save-store.cjs');
+const { createUpdater, registerUpdateIpc } = require('./updater.cjs');
 
 const DIST_DIR = path.join(__dirname, '..', 'dist');
 const DEV = process.env.ECHO_ARENA_DEV === '1';
@@ -161,7 +162,7 @@ app.on('second-instance', () => {
 
 app.whenReady().then(() => {
   // 游戏里没有文字输入。内置拼写检查在 Windows / Linux 上会联网下载词典，这里整体关掉，
-  // 保证运行时不访问外部网络。
+  // 保证除了检查和下载更新，运行时不访问外部网络。
   session.defaultSession.setSpellCheckerLanguages([]);
   session.defaultSession.setSpellCheckerEnabled(false);
   protocol.handle('app', (request) => {
@@ -170,6 +171,7 @@ app.whenReady().then(() => {
     return net.fetch(pathToFileURL(filePath).toString());
   });
   registerIpc(createSaveStore(app.getPath('userData')));
+  registerUpdateIpc(createUpdater({ getWindow: () => mainWindow }));
   buildMenu();
   createWindow();
   app.on('activate', () => {
