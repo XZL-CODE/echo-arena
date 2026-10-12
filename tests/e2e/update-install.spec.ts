@@ -102,6 +102,10 @@ test('立即更新：下载新版、核对签名、替换安装并自动重新�
     await expect
       .poll(() => running(processMatch), { timeout: 2 * 60_000, intervals: [1000] })
       .toBe(true);
+    // CI 的运行摘要里留一条记录（GitHub 注释）
+    console.log(
+      `::notice title=更新：替换安装::${process.platform} 上下载、核对签名、替换安装并重新打开都通过`,
+    );
   } finally {
     const log = path.join(os.tmpdir(), 'EchoArena-update', '9.9.9', 'replace.log');
     if (fs.existsSync(log)) console.log(`replace.log:\n${fs.readFileSync(log, 'utf8')}`);
