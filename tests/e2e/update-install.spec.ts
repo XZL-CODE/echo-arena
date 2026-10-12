@@ -29,13 +29,24 @@ function installerFile(): string {
   return path.join(dir, name);
 }
 
-function running(match: string): boolean {
-  if (process.platform === 'darwin') {
-    return spawnSync('pgrep', ['-f', match]).status === 0;
-  }
-  const script = `@(Get-Process EchoArena -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '${match}*' }).Count`;
+/** 是否有从 where 下面启动的游戏进程在运行。 */
+function running(where: string): boolean {
+  if (process.platform === 'darwin') return spawnSync('pgrep', ['-f', where]).status === 0;
+  // Windows 的临时目录可能是 8.3 短文件名（RUNNER~1），两边都解析成真实路径再比
+  const script =
+    '(Get-Process EchoArena -ErrorAction SilentlyContinue | ForEach-Object { $_.Path }) -join "`n"';
   const out = execFileSync('powershell', ['-NoProfile', '-Command', script], { encoding: 'utf8' });
-  return Number(out.trim()) > 0;
+  const root = fs.realpathSync.native(where).toLowerCase() + path.sep;
+  return out
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .some((file) => {
+      try {
+        return fs.realpathSync.native(file).toLowerCase().startsWith(root);
+      } catch {
+        return false;
+      }
+    });
 }
 
 function stopAll(match: string): void {
@@ -55,7 +66,10 @@ test('立即更新：下载新版、核对签名、替换安装并自动重新�
     notes: releaseBody('9.9.9', ['安装测试']),
   });
 
-  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'echo-arena-install-'));
+  // 解析成真实路径：Windows 的临时目录可能是 8.3 短文件名，macOS 的 /var 是 /private/var 的链接
+  const work = fs.realpathSync.native(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'echo-arena-install-')),
+  );
   let executable: string;
   /** 换没换成新版本、新版本在不在运行的判断依据。 */
   let replaced: () => boolean;
@@ -69,7 +83,8 @@ test('立即更新：下载新版、核对签名、替换安装并自动重新�
     executable = path.join(copy, 'Contents', 'MacOS', path.basename(exe));
     const inode = fs.statSync(copy).ino;
     replaced = () => fs.existsSync(copy) && fs.statSync(copy).ino !== inode;
-    processMatch = path.join(copy, 'Contents', 'MacOS');
+    // 只用英文的那段路径匹配进程（包名是中文）
+    processMatch = path.join(work, 'Applications');
   } else {
     const dir = path.join(work, 'EchoArena');
     const install = spawnSync(installer, ['/S', '/currentuser', `/D=${dir}`]);
