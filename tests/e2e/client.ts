@@ -15,6 +15,12 @@ import { fileURLToPath } from 'node:url';
 // 末尾的反斜杠会把收尾引号转义掉，导致 Electron 拿到错误的程序路径。
 const ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 
+/**
+ * 等战斗计时走动的时限。CI 机器没有显卡、用软件渲染，一帧可能要一秒以上，而每帧最多推进
+ * 0.1 秒游戏时间（特写慢放时更少），计时走满一秒可能要十几秒。
+ */
+export const CLOCK_TIMEOUT = 40_000;
+
 export interface Client {
   app: ElectronApplication;
   page: Page;

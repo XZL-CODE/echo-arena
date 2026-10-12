@@ -5,6 +5,7 @@ import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  CLOCK_TIMEOUT,
   fight,
   finishBattle,
   launchClient,
@@ -210,7 +211,7 @@ test('战斗中空格暂停、点敌人设集火，窗口失焦自动暂停', as
   await page.click('[data-testid=start-battle]');
   const time = page.locator('[data-testid=time]');
   const banner = page.locator('[data-testid=banner]');
-  await expect(time).not.toHaveText('0:00', { timeout: 10_000 });
+  await expect(time).not.toHaveText('0:00', { timeout: CLOCK_TIMEOUT });
 
   await page.keyboard.press('Space');
   await expect(banner).toBeVisible();
@@ -230,7 +231,7 @@ test('战斗中空格暂停、点敌人设集火，窗口失焦自动暂停', as
 
   await page.keyboard.press('Space');
   await expect(banner).toBeHidden();
-  await expect(time).not.toHaveText(frozen, { timeout: 5_000 });
+  await expect(time).not.toHaveText(frozen, { timeout: CLOCK_TIMEOUT });
 
   // 窗口失去焦点时自动暂停（设置里默认打开），回到窗口后继续
   await page.evaluate(() => window.dispatchEvent(new Event('blur')));

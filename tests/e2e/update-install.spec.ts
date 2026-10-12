@@ -54,6 +54,15 @@ function stopAll(match: string): void {
   else spawnSync('taskkill', ['/F', '/IM', 'EchoArena.exe']);
 }
 
+/** 还有没有游戏进程（包括辅助进程）在运行。 */
+function anyLeft(match: string): boolean {
+  if (process.platform === 'darwin') return spawnSync('pgrep', ['-f', match]).status === 0;
+  const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq EchoArena.exe', '/NH'], {
+    encoding: 'utf8',
+  });
+  return /EchoArena\.exe/i.test(out);
+}
+
 test('立即更新：下载新版、核对签名、替换安装并自动重新打开', async () => {
   const key = createTestKey();
   const feed = await startFeed(key);
@@ -131,7 +140,14 @@ test('立即更新：下载新版、核对签名、替换安装并自动重新�
       const uninstaller = fs.existsSync(dir)
         ? fs.readdirSync(dir).find((f) => /^Uninstall .*\.exe$/.test(f))
         : undefined;
-      if (uninstaller) spawnSync(path.join(dir, uninstaller), ['/S', '/currentuser']);
+      // NSIS 卸载程序默认把自己拷到临时目录在后台运行、立刻返回，接着会关掉所有 EchoArena.exe，
+      // 打断后面的测试。_?= 让它在原地同步运行，卸载完才返回（安装目录随后自己删）。
+      if (uninstaller) {
+        spawnSync(path.join(dir, uninstaller), ['/S', '/currentuser', `_?=${dir}`]);
+      }
     }
+    // 等游戏进程（包括辅助进程）全部退出，后面的测试从干净的状态开始
+    await expect.poll(() => anyLeft(processMatch), { timeout: 60_000 }).toBe(false);
+    fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
   }
 });
