@@ -47,6 +47,16 @@
 
 第一次运行会自动安装依赖、下载 Electron（约 100 MB，需要联网；官方源下载失败时自动改用 npmmirror 镜像）并构建，之后可以离线游玩。
 
+### 自动更新
+
+从 v0.6.0 起，游戏启动几秒后会在后台检查 GitHub 上有没有新版本（每天最多一次；发现新版本后，装上之前每次启动都会提示）。有新版本时标题页右上角出现“新版本”按钮，点开能看更新说明：
+
+- macOS 版和 Windows 安装版点“立即更新”，游戏会下载新版、核对签名，然后安装并自动重新打开。macOS 要从“应用程序”文件夹里打开游戏才能这样更新。
+- Windows 免安装版和从源码运行的版本会打开下载页。
+- 更新包都用作者的密钥签过名，签名对不上不会安装。
+
+游戏只在检查和下载更新时访问 GitHub，其余时候不联网，没网也能照常玩。设置里的“更新”一栏可以关掉自动检查，也可以手动检查。v0.5.1 及更早的版本没有这个功能，需要手动下载安装一次。
+
 ## 操作
 
 所有操作都能用触控板点击完成，键盘快捷键是补充：
@@ -110,7 +120,7 @@
 
 ## 存档与重置
 
-存档和设置只保存在这台电脑上，不需要账号，不联网：
+存档和设置只保存在这台电脑上，不需要账号：
 
 - macOS：`~/Library/Application Support/EchoArena/save.json`
 - Windows：`%APPDATA%\EchoArena\save.json`
@@ -135,4 +145,4 @@
 | `npm run shots`                        | 重新生成 README 截图（Linux 上用 `xvfb-run`） |
 | `npm run dist:mac` / `dist:win`        | 在对应系统上打包，输出到 `release/`           |
 
-代码结构：`src/core` 是不依赖界面的规则与内容（宠物与形态、技能与大招、五系相克、走位、回响、一轮流程、存档格式）；`src/gfx` 用 three.js 画 3D（`kit` 建模工具、`models` 各形态造型、`anim` 程序动画、`battle` 战场与镜头、`fx` 特效）；`src/audio` 合成声音，`src/game` 连接规则与画面，`src/ui` 是界面与新手指引；`src/lab` 是开发用的造型样张页（`scripts/lab-shot.mjs` 截图）；`electron/` 是客户端外壳（窗口、本地资源协议、存档读写）。代码合并到 `main` 后，CI 在测试通过后把安装包发布到 Releases，版本号取 `package.json` 的 `version`（这个版本已发布过就跳过，发新版先改版本号）；推送 `v*` 标签，或在 Actions 里手动运行“构建与打包”并填写版本号，也会发布。
+代码结构：`src/core` 是不依赖界面的规则与内容（宠物与形态、技能与大招、五系相克、走位、回响、一轮流程、存档格式）；`src/gfx` 用 three.js 画 3D（`kit` 建模工具、`models` 各形态造型、`anim` 程序动画、`battle` 战场与镜头、`fx` 特效）；`src/audio` 合成声音，`src/game` 连接规则与画面，`src/ui` 是界面与新手指引；`src/lab` 是开发用的造型样张页（`scripts/lab-shot.mjs` 截图）；`electron/` 是客户端外壳（窗口、本地资源协议、存档读写、自动更新）。代码合并到 `main` 后，CI 在测试通过后把安装包发布到 Releases，版本号取 `package.json` 的 `version`（这个版本已发布过就跳过，发新版先改版本号）；推送 `v*` 标签，或在 Actions 里手动运行“构建与打包”并填写版本号，也会发布，版本号要与 `package.json` 一致。发布时 CI 用仓库 Secret 里的签名私钥（`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）给 dmg 与 Windows 安装版签名，生成更新清单 `latest.json` 一起上传；Release 正文的“更新内容”取合并进来的 PR 正文里“## 更新内容”一节。

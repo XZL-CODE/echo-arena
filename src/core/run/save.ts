@@ -45,6 +45,27 @@ export interface Settings {
   seenHints: string[];
   /** 新手指引里已经学过或跳过的课。 */
   guideSeen: GuidePart[];
+  /** 自动检查更新（启动几秒后在后台检查，每天最多一次）。 */
+  autoUpdate: boolean;
+  /** 上次成功检查更新的时间与发现的新版本。 */
+  updateCheck: UpdateCheckRecord | null;
+}
+
+export interface UpdateCheckRecord {
+  /** 时间戳（毫秒）。 */
+  at: number;
+  /** 发现的新版本号；已是最新时为 null。 */
+  found: string | null;
+}
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * 该不该自动检查更新：从没查过、离上次超过一天（或系统时间被往回调了），
+ * 或者上次发现的新版本还没装上（每次启动都查，让提示一直在）。
+ */
+export function updateCheckDue(last: UpdateCheckRecord | null, now: number): boolean {
+  return !last || last.found !== null || now - last.at >= DAY_MS || now < last.at;
 }
 
 export interface Records {
@@ -82,6 +103,8 @@ export function defaultSettings(): Settings {
     difficulty: 'normal',
     seenHints: [],
     guideSeen: [],
+    autoUpdate: true,
+    updateCheck: null,
   };
 }
 
@@ -159,7 +182,18 @@ function parseSettings(raw: unknown, version: number): Settings {
       version >= SAVE_VERSION && Array.isArray(raw.guideSeen)
         ? GUIDE_PARTS.filter((part) => (raw.guideSeen as unknown[]).includes(part))
         : [],
+    autoUpdate: bool(raw.autoUpdate, d.autoUpdate),
+    updateCheck: parseUpdateCheck(raw.updateCheck),
   };
+}
+
+function parseUpdateCheck(raw: unknown): UpdateCheckRecord | null {
+  if (!isObject(raw) || typeof raw.at !== 'number' || !Number.isFinite(raw.at)) return null;
+  const found =
+    typeof raw.found === 'string' && /^\d+\.\d+\.\d+[0-9A-Za-z.+-]*$/.test(raw.found)
+      ? raw.found
+      : null;
+  return { at: raw.at, found };
 }
 
 function parseRecords(raw: unknown): Records {

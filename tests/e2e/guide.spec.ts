@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CLOCK_TIMEOUT,
   dragHand,
   finishBattle,
   launchClient,
@@ -113,7 +114,9 @@ test('新安装：战前、开战、回响、结算、奖励依次教，照着�
   await page.screenshot({ path: screenshotPath('guide-prep'), animations: 'disabled' });
   await page.keyboard.press('Enter');
   await battleLesson(page);
-  await expect(page.locator('[data-testid=time]')).not.toHaveText('0:00', { timeout: 5_000 });
+  await expect(page.locator('[data-testid=time]')).not.toHaveText('0:00', {
+    timeout: CLOCK_TIMEOUT,
+  });
   await page.evaluate(() => (window as unknown as HookWindow).__echo.hold(true));
 
   // 第一次打出 2 级以上的回响：停下来讲
@@ -171,7 +174,9 @@ test('跳过：一次跳过全部课程，开战、回响、结算、奖励都�
   await expect.poll(() => readSave(userData)?.settings.guideSeen).toEqual(ALL_PARTS);
 
   await page.click('[data-testid=start-battle]');
-  await expect(page.locator('[data-testid=time]')).not.toHaveText('0:00', { timeout: 10_000 });
+  await expect(page.locator('[data-testid=time]')).not.toHaveText('0:00', {
+    timeout: CLOCK_TIMEOUT,
+  });
   await expect(guide(page)).toBeHidden();
   await page.evaluate(() => (window as unknown as HookWindow).__echo.hold(true));
   expect(await playUntilLesson(page)).toBe(false);
@@ -253,7 +258,7 @@ test('“？”随时重看：战前与战斗中都能直接翻看，战斗中�
 
   await page.click('[data-testid=start-battle]');
   const time = page.locator('[data-testid=time]');
-  await expect(time).not.toHaveText('0:00', { timeout: 10_000 });
+  await expect(time).not.toHaveText('0:00', { timeout: CLOCK_TIMEOUT });
   await page.click('[data-testid=help]');
   await expect(guideTitle(page)).toHaveText('点一个敌人，集火它');
   const frozen = (await time.textContent()) ?? '';
@@ -263,7 +268,7 @@ test('“？”随时重看：战前与战斗中都能直接翻看，战斗中�
   await expect(guideTitle(page)).toHaveText('暂停与加速');
   await page.keyboard.press('Enter');
   await expect(guide(page)).toBeHidden();
-  await expect(time).not.toHaveText(frozen, { timeout: 5_000 });
+  await expect(time).not.toHaveText(frozen, { timeout: CLOCK_TIMEOUT });
   expect(readSave(userData)?.settings.guideSeen).toEqual(ALL_PARTS);
   await app.close();
   expect(errors).toEqual([]);

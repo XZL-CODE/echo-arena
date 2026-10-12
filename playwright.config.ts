@@ -7,5 +7,6 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   outputDir: 'test-results/e2e',
-  reporter: [['list']],
+  // CI 上另外输出 GitHub 注释：失败的测试连同错误信息显示在运行摘要里
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
 });

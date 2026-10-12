@@ -3,7 +3,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { launchClient, screenshotPath, skipGuide } from './client';
+import { CLOCK_TIMEOUT, launchClient, screenshotPath, skipGuide } from './client';
 
 test('客户端启动、选伙伴开始一轮并写入本地存档', async () => {
   const { app, page, userData } = await launchClient();
@@ -26,7 +26,9 @@ test('客户端启动、选伙伴开始一轮并写入本地存档', async () =>
   await page.screenshot({ path: screenshotPath('smoke-prep'), animations: 'disabled' });
   await page.click('[data-testid=start-battle]');
   await expect(page.locator('[data-testid=battle-hud]')).toBeVisible();
-  await expect(page.locator('[data-testid=time]')).not.toHaveText('0:00', { timeout: 10_000 });
+  await expect(page.locator('[data-testid=time]')).not.toHaveText('0:00', {
+    timeout: CLOCK_TIMEOUT,
+  });
   await page.screenshot({ path: screenshotPath('smoke-battle') });
 
   // 内置拼写检查在 Windows / Linux 上会联网下载词典，客户端启动时把它关掉了。
